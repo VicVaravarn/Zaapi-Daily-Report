@@ -125,17 +125,38 @@ class SalesHuddleParser:
                 }
                 result["funnel"].append(metric_data)
 
-            # Parse account names (rows 18+)
-            accounts = {"yayee": [], "toey": []}
-            for row_idx in range(18, min(len(self.data), 30)):
-                yayee_account = self.get_cell(row_idx, 9)
-                toey_account = self.get_cell(row_idx, 12)
-                if yayee_account:
-                    accounts["yayee"].append(yayee_account)
-                if toey_account:
-                    accounts["toey"].append(toey_account)
+            # Parse Hot Deals section (rows 18-28)
+            # Structure: Row 19 = "Hot Deal", Row 23 = "CTP", Row 27 = "Won" (0-indexed: 18, 22, 26)
+            hot_deals = {
+                "hot_deal": {"yayee": [], "toey": []},
+                "ctp": {"yayee": [], "toey": []},
+                "won": {"yayee": [], "toey": []}
+            }
 
-            result["accounts"] = accounts
+            current_category = None
+            for row_idx in range(18, min(len(self.data), 30)):
+                yayee_val = self.get_cell(row_idx, 9)
+                toey_val = self.get_cell(row_idx, 12)
+
+                # Check if this row is a category header
+                check_val = yayee_val.lower().strip() if yayee_val else ""
+                if check_val == "hot deal":
+                    current_category = "hot_deal"
+                    continue
+                elif check_val == "ctp":
+                    current_category = "ctp"
+                    continue
+                elif check_val == "won":
+                    current_category = "won"
+                    continue
+
+                if current_category:
+                    if yayee_val and yayee_val.lower() not in ["hot deal", "ctp", "won"]:
+                        hot_deals[current_category]["yayee"].append(yayee_val)
+                    if toey_val and toey_val.lower() not in ["hot deal", "ctp", "won"]:
+                        hot_deals[current_category]["toey"].append(toey_val)
+
+            result["hot_deals"] = hot_deals
 
         except Exception as e:
             print(f"Error parsing outbound section: {e}", file=sys.stderr)
@@ -194,26 +215,36 @@ class SalesHuddleParser:
                 }
                 result["funnel"].append(metric_data)
 
-            # Parse Hot Deals section (typically rows 19-21)
-            hot_deals_start = 18
+            # Parse Hot Deals section (rows 18-28)
+            # Hot deal category headers are in the agent columns (Pleum col 26, Loogpad col 29)
             hot_deals = {
-                "engaged": {"pleum": [], "loogpad": []},
+                "hot_deal": {"pleum": [], "loogpad": []},
                 "ctp": {"pleum": [], "loogpad": []},
                 "won": {"pleum": [], "loogpad": []}
             }
 
-            # This section structure varies, so we attempt to parse what's available
-            for row_idx in range(hot_deals_start, min(len(self.data), hot_deals_start + 10)):
-                label = self.get_cell(row_idx, 17)  # R
-                if "Engaged" in label:
-                    hot_deals["engaged"]["pleum"] = self.get_cell(row_idx, pleum_wtd_col)
-                    hot_deals["engaged"]["loogpad"] = self.get_cell(row_idx, loogpad_wtd_col)
-                elif "CtP" in label:
-                    hot_deals["ctp"]["pleum"] = self.get_cell(row_idx, pleum_wtd_col)
-                    hot_deals["ctp"]["loogpad"] = self.get_cell(row_idx, loogpad_wtd_col)
-                elif "Won" in label and "Account" in label:
-                    hot_deals["won"]["pleum"] = self.get_cell(row_idx, pleum_wtd_col)
-                    hot_deals["won"]["loogpad"] = self.get_cell(row_idx, loogpad_wtd_col)
+            current_category = None
+            for row_idx in range(18, min(len(self.data), 30)):
+                pleum_val = self.get_cell(row_idx, pleum_wtd_col)
+                loogpad_val = self.get_cell(row_idx, loogpad_wtd_col)
+
+                # Check if this row is a category header
+                check_val = pleum_val.lower().strip() if pleum_val else ""
+                if check_val == "hot deal":
+                    current_category = "hot_deal"
+                    continue
+                elif check_val == "ctp":
+                    current_category = "ctp"
+                    continue
+                elif check_val == "won":
+                    current_category = "won"
+                    continue
+
+                if current_category:
+                    if pleum_val and pleum_val.lower() not in ["hot deal", "ctp", "won"]:
+                        hot_deals[current_category]["pleum"].append(pleum_val)
+                    if loogpad_val and loogpad_val.lower() not in ["hot deal", "ctp", "won"]:
+                        hot_deals[current_category]["loogpad"].append(loogpad_val)
 
             result["hot_deals"] = hot_deals
 
@@ -318,21 +349,34 @@ class SalesHuddleParser:
                 }
                 result["funnel"].append(metric_data)
 
-            # Parse Hot Deals section (typically rows 19-21)
-            hot_deals_start = 18
+            # Parse Hot Deals section (rows 18-28)
             hot_deals = {
-                "interested": {"sheronika": [], "thanom": []},
-                "engaged": {"sheronika": [], "thanom": []}
+                "hot_deal": {"sheronika": [], "thanom": []},
+                "ctp": {"sheronika": [], "thanom": []},
+                "won": {"sheronika": [], "thanom": []}
             }
 
-            for row_idx in range(hot_deals_start, min(len(self.data), hot_deals_start + 10)):
-                label = self.get_cell(row_idx, label_col)
-                if "Interested" in label:
-                    hot_deals["interested"]["sheronika"] = self.get_cell(row_idx, sheronika_wtd_col)
-                    hot_deals["interested"]["thanom"] = self.get_cell(row_idx, thanom_wtd_col)
-                elif "Engaged" in label:
-                    hot_deals["engaged"]["sheronika"] = self.get_cell(row_idx, sheronika_wtd_col)
-                    hot_deals["engaged"]["thanom"] = self.get_cell(row_idx, thanom_wtd_col)
+            current_category = None
+            for row_idx in range(18, min(len(self.data), 30)):
+                sheronika_val = self.get_cell(row_idx, sheronika_wtd_col)
+                thanom_val = self.get_cell(row_idx, thanom_wtd_col)
+
+                check_val = sheronika_val.lower().strip() if sheronika_val else ""
+                if check_val == "hot deal":
+                    current_category = "hot_deal"
+                    continue
+                elif check_val == "ctp":
+                    current_category = "ctp"
+                    continue
+                elif check_val == "won":
+                    current_category = "won"
+                    continue
+
+                if current_category:
+                    if sheronika_val and sheronika_val.lower() not in ["hot deal", "ctp", "won"]:
+                        hot_deals[current_category]["sheronika"].append(sheronika_val)
+                    if thanom_val and thanom_val.lower() not in ["hot deal", "ctp", "won"]:
+                        hot_deals[current_category]["thanom"].append(thanom_val)
 
             result["hot_deals"] = hot_deals
 
@@ -345,7 +389,8 @@ class SalesHuddleParser:
         """Parse the International Outbound sales section."""
         result = {
             "funnel": [],
-            "summary": {}
+            "summary": {},
+            "hot_deals": {}
         }
 
         try:
@@ -396,6 +441,37 @@ class SalesHuddleParser:
                 }
                 result["funnel"].append(metric_data)
 
+            # Parse Hot Deals section (rows 18-28)
+            hot_deals = {
+                "hot_deal": {"sheronika": [], "thanom": []},
+                "ctp": {"sheronika": [], "thanom": []},
+                "won": {"sheronika": [], "thanom": []}
+            }
+
+            current_category = None
+            for row_idx in range(18, min(len(self.data), 30)):
+                sheronika_val = self.get_cell(row_idx, sheronika_wtd_col)
+                thanom_val = self.get_cell(row_idx, thanom_wtd_col)
+
+                check_val = sheronika_val.lower().strip() if sheronika_val else ""
+                if check_val == "hot deal":
+                    current_category = "hot_deal"
+                    continue
+                elif check_val == "ctp":
+                    current_category = "ctp"
+                    continue
+                elif check_val == "won":
+                    current_category = "won"
+                    continue
+
+                if current_category:
+                    if sheronika_val and sheronika_val.lower() not in ["hot deal", "ctp", "won"]:
+                        hot_deals[current_category]["sheronika"].append(sheronika_val)
+                    if thanom_val and thanom_val.lower() not in ["hot deal", "ctp", "won"]:
+                        hot_deals[current_category]["thanom"].append(thanom_val)
+
+            result["hot_deals"] = hot_deals
+
         except Exception as e:
             print(f"Error parsing international outbound section: {e}", file=sys.stderr)
 
@@ -421,50 +497,39 @@ class MarketingSignupsParser:
         """Parse the marketing sign-ups data."""
         result = {
             "date": "",
-            "regions": {}
+            "regions": {},
+            "total": {}
         }
 
         try:
             # Row 0: Date
             result["date"] = self.get_cell(0, 0)
 
-            # Rows 3-6: TH, SEA, ROW data
+            # Row 3: Total, Row 4: TH, Row 5: SEA, Row 6: ROW
             regions_map = {
-                3: "TH",
-                4: "Thailand",  # Sometimes labeled differently
+                4: "TH",
                 5: "SEA",
                 6: "ROW"
             }
 
             for row_idx, region in regions_map.items():
-                region_label = self.get_cell(row_idx, 0) or self.get_cell(row_idx, 1)
+                result["regions"][region] = {
+                    "target_wtd": self.get_cell(row_idx, 2),
+                    "target_daily": self.get_cell(row_idx, 3),
+                    "total_wtd": self.get_cell(row_idx, 4),
+                    "total_daily": self.get_cell(row_idx, 5),
+                    "wtd_vs_target": self.get_cell(row_idx, 6),
+                    "qualified_wtd": self.get_cell(row_idx, 7),
+                    "qualified_daily": self.get_cell(row_idx, 8),
+                    "highly_qualified_wtd": self.get_cell(row_idx, 9),
+                    "highly_qualified_daily": self.get_cell(row_idx, 10),
+                    "premium_wtd": self.get_cell(row_idx, 11),
+                    "premium_daily": self.get_cell(row_idx, 12),
+                    "best_wtd": self.get_cell(row_idx, 13),
+                    "best_daily": self.get_cell(row_idx, 14)
+                }
 
-                # Determine which region this is
-                if row_idx == 3:
-                    region = "TH"
-                elif row_idx == 5:
-                    region = "SEA"
-                elif row_idx == 6:
-                    region = "ROW"
-
-                if region in ["TH", "SEA", "ROW"]:
-                    result["regions"][region] = {
-                        "target_wtd": self.get_cell(row_idx, 2),
-                        "target_daily": self.get_cell(row_idx, 3),
-                        "total_wtd": self.get_cell(row_idx, 4),
-                        "total_daily": self.get_cell(row_idx, 5),
-                        "wtd_vs_target": self.get_cell(row_idx, 6),
-                        "qualified_wtd": self.get_cell(row_idx, 7),
-                        "qualified_daily": self.get_cell(row_idx, 8),
-                        "highly_qualified_wtd": self.get_cell(row_idx, 9),
-                        "highly_qualified_daily": self.get_cell(row_idx, 10),
-                        "premium_wtd": self.get_cell(row_idx, 11),
-                        "premium_daily": self.get_cell(row_idx, 12),
-                        "best_wtd": self.get_cell(row_idx, 13),
-                        "best_daily": self.get_cell(row_idx, 14)
-                    }
-
-            # Total row (usually row 3)
+            # Total row is row 3
             result["total"] = {
                 "target_wtd": self.get_cell(3, 2),
                 "target_daily": self.get_cell(3, 3),
@@ -839,7 +904,7 @@ class HTMLDashboardGenerator:
             </div>
             <div class="card">
                 <div class="label">Dashboard Status</div>
-                <div class="value">â</div>
+                <div class="value">✓</div>
                 <div class="subtext">All systems operational</div>
             </div>
         </div>
@@ -861,18 +926,31 @@ class HTMLDashboardGenerator:
                 agent_keys=["yayee", "toey"]
             )
 
-            # Agent accounts
-            accounts = outbound.get("accounts", {})
-            for agent_name, agent_key in [("Yayee", "yayee"), ("Toey", "toey")]:
-                agent_accounts = accounts.get(agent_key, [])
-                if agent_accounts:
-                    html += f'<div class="agent-section">'
-                    html += f'<div class="agent-name">{agent_name}</div>'
-                    html += '<div class="account-list">'
-                    for acc in agent_accounts:
-                        if acc:
-                            html += f'<div class="account-tag">{acc}</div>'
-                    html += '</div></div>'
+            # Hot Deals section
+            hot_deals = outbound.get("hot_deals", {})
+            if hot_deals:
+                html += '<table style="margin-top: 20px;">'
+                html += '<thead><tr>'
+                html += '<th>Hot Deals Category</th>'
+                html += '<th style="text-align: right;">Yayee</th>'
+                html += '<th style="text-align: right;">Toey</th>'
+                html += '</tr></thead>'
+                html += '<tbody>'
+
+                for category in ["hot_deal", "ctp", "won"]:
+                    if category in hot_deals:
+                        cat_data = hot_deals[category]
+                        cat_name = "Hot Deal" if category == "hot_deal" else category.upper()
+                        yayee_items = cat_data.get("yayee", [])
+                        toey_items = cat_data.get("toey", [])
+                        yayee_str = ", ".join(yayee_items) if yayee_items else "-"
+                        toey_str = ", ".join(toey_items) if toey_items else "-"
+                        html += f'<tr><td class="metric-name">{cat_name}</td>'
+                        html += f'<td class="metric-value">{yayee_str}</td>'
+                        html += f'<td class="metric-value">{toey_str}</td>'
+                        html += '</tr>'
+
+                html += '</tbody></table>'
         else:
             html += '<div class="unavailable">Data unavailable</div>'
 
@@ -901,13 +979,17 @@ class HTMLDashboardGenerator:
                 html += '</tr></thead>'
                 html += '<tbody>'
 
-                for category in ["engaged", "ctp", "won"]:
+                for category in ["hot_deal", "ctp", "won"]:
                     if category in hot_deals:
                         cat_data = hot_deals[category]
-                        cat_name = category.upper() if category != "ctp" else "CtP"
+                        cat_name = "Hot Deal" if category == "hot_deal" else category.upper()
+                        pleum_items = cat_data.get("pleum", [])
+                        loogpad_items = cat_data.get("loogpad", [])
+                        pleum_str = ", ".join(pleum_items) if pleum_items else "-"
+                        loogpad_str = ", ".join(loogpad_items) if loogpad_items else "-"
                         html += f'<tr><td class="metric-name">{cat_name}</td>'
-                        html += f'<td class="metric-value">{self.safe_number(cat_data.get("pleum", ""))}</td>'
-                        html += f'<td class="metric-value">{self.safe_number(cat_data.get("loogpad", ""))}</td>'
+                        html += f'<td class="metric-value">{pleum_str}</td>'
+                        html += f'<td class="metric-value">{loogpad_str}</td>'
                         html += '</tr>'
 
                 html += '</tbody></table>'
@@ -933,6 +1015,32 @@ class HTMLDashboardGenerator:
                 agents=["Sheronika", "Thanom"],
                 agent_keys=["sheronika", "thanom"]
             )
+
+            # Hot Deals section
+            hot_deals = intl_outbound.get("hot_deals", {})
+            if hot_deals:
+                html += '<table style="margin-top: 20px;">'
+                html += '<thead><tr>'
+                html += '<th>Hot Deals Category</th>'
+                html += '<th style="text-align: right;">Sheronika</th>'
+                html += '<th style="text-align: right;">Thanom</th>'
+                html += '</tr></thead>'
+                html += '<tbody>'
+
+                for category in ["hot_deal", "ctp", "won"]:
+                    if category in hot_deals:
+                        cat_data = hot_deals[category]
+                        cat_name = "Hot Deal" if category == "hot_deal" else category.upper()
+                        sheronika_items = cat_data.get("sheronika", [])
+                        thanom_items = cat_data.get("thanom", [])
+                        sheronika_str = ", ".join(sheronika_items) if sheronika_items else "-"
+                        thanom_str = ", ".join(thanom_items) if thanom_items else "-"
+                        html += f'<tr><td class="metric-name">{cat_name}</td>'
+                        html += f'<td class="metric-value">{sheronika_str}</td>'
+                        html += f'<td class="metric-value">{thanom_str}</td>'
+                        html += '</tr>'
+
+                html += '</tbody></table>'
         else:
             html += '<div class="unavailable">Data unavailable</div>'
 
@@ -961,13 +1069,17 @@ class HTMLDashboardGenerator:
                 html += '</tr></thead>'
                 html += '<tbody>'
 
-                for category in ["interested", "engaged"]:
+                for category in ["hot_deal", "ctp", "won"]:
                     if category in hot_deals:
                         cat_data = hot_deals[category]
-                        cat_name = category.capitalize()
+                        cat_name = "Hot Deal" if category == "hot_deal" else category.upper()
+                        sheronika_items = cat_data.get("sheronika", [])
+                        thanom_items = cat_data.get("thanom", [])
+                        sheronika_str = ", ".join(sheronika_items) if sheronika_items else "-"
+                        thanom_str = ", ".join(thanom_items) if thanom_items else "-"
                         html += f'<tr><td class="metric-name">{cat_name}</td>'
-                        html += f'<td class="metric-value">{self.safe_number(cat_data.get("sheronika", ""))}</td>'
-                        html += f'<td class="metric-value">{self.safe_number(cat_data.get("thanom", ""))}</td>'
+                        html += f'<td class="metric-value">{sheronika_str}</td>'
+                        html += f'<td class="metric-value">{thanom_str}</td>'
                         html += '</tr>'
 
                 html += '</tbody></table>'
@@ -1119,8 +1231,8 @@ class SlackNotifier:
 Date: {date_str}
 
 *Sales Metrics*
-â¢ Outbound Won: {outbound_won}
-â¢ Inbound Won: {inbound_won}
+• Outbound Won: {outbound_won}
+• Inbound Won: {inbound_won}
 
 :link: <{dashboard_url}|View Full Dashboard>
             """.strip()
