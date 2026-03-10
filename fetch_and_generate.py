@@ -505,11 +505,12 @@ class MarketingSignupsParser:
             # Row 0: Date
             result["date"] = self.get_cell(0, 0)
 
-            # Row 3: Total, Row 4: TH, Row 5: SEA, Row 6: ROW
+            # CSV Row 0: Combined header (date + column names)
+            # CSV Row 1: Total, Row 2: TH, Row 3: SEA, Row 4: ROW
             regions_map = {
-                4: "TH",
-                5: "SEA",
-                6: "ROW"
+                2: "TH",
+                3: "SEA",
+                4: "ROW"
             }
 
             for row_idx, region in regions_map.items():
@@ -529,13 +530,13 @@ class MarketingSignupsParser:
                     "best_daily": self.get_cell(row_idx, 14)
                 }
 
-            # Total row is row 3
+            # Total row is CSV row 1
             result["total"] = {
-                "target_wtd": self.get_cell(3, 2),
-                "target_daily": self.get_cell(3, 3),
-                "total_wtd": self.get_cell(3, 4),
-                "total_daily": self.get_cell(3, 5),
-                "wtd_vs_target": self.get_cell(3, 6)
+                "target_wtd": self.get_cell(1, 2),
+                "target_daily": self.get_cell(1, 3),
+                "total_wtd": self.get_cell(1, 4),
+                "total_daily": self.get_cell(1, 5),
+                "wtd_vs_target": self.get_cell(1, 6)
             }
 
         except Exception as e:
