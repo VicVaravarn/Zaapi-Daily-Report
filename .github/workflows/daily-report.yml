@@ -29,8 +29,7 @@ jobs:
         run: |
           python fetch_and_generate.py \
             --output index.html \
-            --slack-token "${{ secrets.SLACK_BOT_TOKEN }}" \
-            --slack-channel "${{ secrets.SLACK_CHANNEL_ID }}" \
+            --slack-webhook-url "${{ secrets.SLACK_WEBHOOK_URL }}" \
             --github-pages-url "https://vicvaravarn.github.io/Zaapi-Daily-Report/"
 
       - name: Commit and push updated dashboard
