@@ -1211,59 +1211,68 @@ class HTMLDashboardGenerator:
 
 
 class SlackNotifier:
-    """Handles posting to Slack."""
+    """Handles posting to Slack via Incoming Webhook."""
 
-    def __init__(self, token: str, channel: str):
-        self.token = token
-        self.channel = channel
-        self.api_url = "https://slack.com/api/chat.postMessage"
+    def __init__(self, webhook_url: str):
+        self.webhook_url = webhook_url
 
-    def post_summary(self, sales_data: Dict[str, Any], dashboard_url: str) -> bool:
+    def post_summary(self, sales_data: Dict[str, Any], marketing_data: Dict[str, Any], dashboard_url: str) -> bool:
         """Post a summary message to Slack."""
         try:
             date_str = sales_data.get("date", datetime.now().strftime("%d/%m/%Y"))
 
-            # Extract metrics
-            outbound_won = sales_data.get("outbound", {}).get("funnel", [{}] * 5)[-1].get("total_wtd", "N/A")
-            inbound_won = sales_data.get("inbound", {}).get("funnel", [{}] * 5)[-1].get("total_wtd", "N/A")
+            # Extract sales metrics
+            outbound_funnel = sales_data.get("outbound", {}).get("funnel", [])
+            inbound_funnel = sales_data.get("inbound", {}).get("funnel", [])
+            intl_outbound_funnel = sales_data.get("intl_outbound", {}).get("funnel", [])
+            intl_inbound_funnel = sales_data.get("intl_inbound", {}).get("funnel", [])
+
+            outbound_won = outbound_funnel[-1].get("total_wtd", "0") if outbound_funnel else "0"
+            inbound_won = inbound_funnel[-1].get("total_wtd", "0") if inbound_funnel else "0"
+            intl_out_won = intl_outbound_funnel[-1].get("total_wtd", "0") if intl_outbound_funnel else "0"
+            intl_in_won = intl_inbound_funnel[-1].get("total_wtd", "0") if intl_inbound_funnel else "0"
+
+            outbound_contact = outbound_funnel[1].get("total_wtd", "0") if len(outbound_funnel) > 1 else "0"
+            inbound_contact = inbound_funnel[1].get("total_wtd", "0") if len(inbound_funnel) > 1 else "0"
+
+            # Extract marketing metrics
+            mktg_total = marketing_data.get("total", {})
+            total_leads_wtd = mktg_total.get("total_wtd", "0")
+            leads_vs_target = mktg_total.get("wtd_vs_target", "-")
 
             message = f"""
-:chart_with_upwards_trend: *Zaapi Daily Activity Report*
-Date: {date_str}
+:chart_with_upwards_trend: *Zaapi Daily Activity Report — {date_str}*
 
-*Sales Metrics*
-• Outbound Won: {outbound_won}
-• Inbound Won: {inbound_won}
+*Marketing — Lead Overview*
+• Total Leads WTD: *{total_leads_wtd}* ({leads_vs_target} vs target)
+
+*Sales — Won Deals WTD*
+• Outbound: *{outbound_won}*  |  Inbound: *{inbound_won}*
+• Intl Outbound: *{intl_out_won}*  |  Intl Inbound: *{intl_in_won}*
+
+*Sales — Contacts WTD*
+• Outbound: *{outbound_contact}*  |  Inbound: *{inbound_contact}*
 
 :link: <{dashboard_url}|View Full Dashboard>
             """.strip()
 
             payload = {
-                "channel": self.channel,
-                "text": message,
-                "mrkdwn": True
-            }
-
-            headers = {
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json"
+                "text": message
             }
 
             response = requests.post(
-                self.api_url,
+                self.webhook_url,
                 json=payload,
-                headers=headers,
                 timeout=10
             )
 
             response.raise_for_status()
-            result = response.json()
 
-            if result.get("ok"):
-                print(f"Slack message posted successfully to {self.channel}")
+            if response.text == "ok":
+                print("Slack message posted successfully via webhook")
                 return True
             else:
-                print(f"Slack API error: {result.get('error')}", file=sys.stderr)
+                print(f"Slack webhook error: {response.text}", file=sys.stderr)
                 return False
 
         except Exception as e:
@@ -1282,13 +1291,8 @@ def main():
         help="Output HTML file path"
     )
     parser.add_argument(
-        "--slack-token",
-        help="Slack bot token for posting"
-    )
-    parser.add_argument(
-        "--slack-channel",
-        default="#daily-reports",
-        help="Slack channel to post to"
+        "--slack-webhook-url",
+        help="Slack Incoming Webhook URL for posting notifications"
     )
     parser.add_argument(
         "--github-pages-url",
@@ -1358,10 +1362,10 @@ def main():
     print(f"Dashboard generated successfully: {output_path}")
 
     # Post to Slack if configured
-    if args.slack_token:
-        notifier = SlackNotifier(args.slack_token, args.slack_channel)
+    if args.slack_webhook_url:
+        notifier = SlackNotifier(args.slack_webhook_url)
         dashboard_url = args.github_pages_url or output_path
-        notifier.post_summary(sales_data, dashboard_url)
+        notifier.post_summary(sales_data, marketing_data, dashboard_url)
 
     print("Report generation complete!")
 
