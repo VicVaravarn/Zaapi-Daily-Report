@@ -32,7 +32,7 @@ class GoogleSheetsFetcher:
         """Fetch and parse a Google Sheet as CSV data."""
         try:
             url = self.get_csv_url(sheet_id, sheet_name)
-            response = self.session.get(url, timeout=10)
+            response = self.session.get(url, timeout=30)
             response.encoding = 'utf-8'
             response.raise_for_status()
 
