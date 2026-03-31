@@ -129,7 +129,7 @@ class SalesHuddleParser:
 
         return hot_deals
 
-        def get_date_info(self) -> Dict[str, str]:
+    def get_date_info(self) -> Dict[str, str]:
         """Extract date information from header section."""
         try:
             date_str = self.get_cell(1, 2)  # Row 2, Col C
