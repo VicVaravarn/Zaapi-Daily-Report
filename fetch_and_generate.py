@@ -24,14 +24,23 @@ class GoogleSheetsFetcher:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
 
-    def get_csv_url(self, sheet_id: str, sheet_name: str) -> str:
-        """Generate CSV export URL for a Google Sheet."""
-        return f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+    def get_csv_url(self, sheet_id: str, sheet_name: str, cell_range: str = None) -> str:
+        """Generate CSV export URL for a Google Sheet, optionally with a cell range."""
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+        if cell_range:
+            url += f"&range={cell_range}"
+        return url
 
-    def fetch_sheet(self, sheet_id: str, sheet_name: str) -> Optional[List[List[str]]]:
-        """Fetch and parse a Google Sheet as CSV data."""
+    def fetch_sheet(self, sheet_id: str, sheet_name: str, cell_range: str = None) -> Optional[List[List[str]]]:
+        """Fetch and parse a Google Sheet as CSV data.
+
+        Args:
+            cell_range: Optional cell range (e.g., 'J19:O28') for targeted fetching.
+                        Needed for areas with merged cells that don't export correctly
+                        in full-sheet CSV mode.
+        """
         try:
-            url = self.get_csv_url(sheet_id, sheet_name)
+            url = self.get_csv_url(sheet_id, sheet_name, cell_range)
             response = self.session.get(url, timeout=30)
             response.encoding = 'utf-8'
             response.raise_for_status()
@@ -40,7 +49,8 @@ class GoogleSheetsFetcher:
             data = list(reader)
             return data
         except Exception as e:
-            print(f"Error fetching sheet '{sheet_name}': {e}", file=sys.stderr)
+            range_label = f" range '{cell_range}'" if cell_range else ""
+            print(f"Error fetching sheet '{sheet_name}'{range_label}: {e}", file=sys.stderr)
             return None
 
     def get_current_week_sheet_name(self) -> str:
@@ -55,8 +65,11 @@ class GoogleSheetsFetcher:
 class SalesHuddleParser:
     """Parses Sales Huddle sheet data."""
 
-    def __init__(self, sheet_data: List[List[str]]):
+    def __init__(self, sheet_data: List[List[str]], hot_deals_ranges: Dict[str, Optional[List[List[str]]]] = None):
         self.data = sheet_data
+        # Hot deals range data fetched separately to work around merged cell CSV export issues.
+        # Keys: 'outbound', 'inbound', 'intl_inbound', 'intl_outbound'
+        self.hot_deals_ranges = hot_deals_ranges or {}
 
     def get_cell(self, row: int, col: int) -> str:
         """Safely get a cell value, handling indices."""
@@ -67,7 +80,56 @@ class SalesHuddleParser:
         except:
             return ""
 
-    def get_date_info(self) -> Dict[str, str]:
+    def _parse_hot_deals_from_range(self, range_data, agent1_col, agent2_col, agent1_name, agent2_name):
+        """Parse hot deals from a range-specific CSV fetch.
+
+        Range data has columns relative to the fetched range (0-indexed).
+        agent1_col/agent2_col are column indices within the range data.
+        """
+        hot_deals = {
+            "hot_deal": {agent1_name: [], agent2_name: []},
+            "ctp": {agent1_name: [], agent2_name: []},
+            "won": {agent1_name: [], agent2_name: []}
+        }
+
+        if not range_data:
+            return hot_deals
+
+        current_category = None
+        for row in range_data:
+            agent1_val = row[agent1_col].strip() if agent1_col < len(row) else ""
+            agent2_val = row[agent2_col].strip() if agent2_col < len(row) else ""
+
+            check1 = agent1_val.lower() if agent1_val else ""
+            check2 = agent2_val.lower() if agent2_val else ""
+
+            if check1 == "hot deal" or check2 == "hot deal":
+                current_category = "hot_deal"
+                continue
+            elif check1 == "ctp" or check2 == "ctp":
+                current_category = "ctp"
+                if check1 == "ctp" and agent2_val and check2 not in ["ctp", "hot deal", "won"]:
+                    hot_deals[current_category][agent2_name].append(agent2_val)
+                elif check2 == "ctp" and agent1_val and check1 not in ["ctp", "hot deal", "won"]:
+                    hot_deals[current_category][agent1_name].append(agent1_val)
+                continue
+            elif check1 == "won" or check2 == "won":
+                current_category = "won"
+                if check1 == "won" and agent2_val and check2 not in ["ctp", "hot deal", "won"]:
+                    hot_deals[current_category][agent2_name].append(agent2_val)
+                elif check2 == "won" and agent1_val and check1 not in ["ctp", "hot deal", "won"]:
+                    hot_deals[current_category][agent1_name].append(agent1_val)
+                continue
+
+            if current_category:
+                if agent1_val and agent1_val.lower() not in ["hot deal", "ctp", "won"]:
+                    hot_deals[current_category][agent1_name].append(agent1_val)
+                if agent2_val and agent2_val.lower() not in ["hot deal", "ctp", "won"]:
+                    hot_deals[current_category][agent2_name].append(agent2_val)
+
+        return hot_deals
+
+        def get_date_info(self) -> Dict[str, str]:
         """Extract date information from header section."""
         try:
             date_str = self.get_cell(1, 2)  # Row 2, Col C
@@ -125,38 +187,41 @@ class SalesHuddleParser:
                 }
                 result["funnel"].append(metric_data)
 
-            # Parse Hot Deals section (rows 18-28)
-            # Structure: Row 19 = "Hot Deal", Row 23 = "CTP", Row 27 = "Won" (0-indexed: 18, 22, 26)
-            hot_deals = {
-                "hot_deal": {"yayee": [], "toey": []},
-                "ctp": {"yayee": [], "toey": []},
-                "won": {"yayee": [], "toey": []}
-            }
-
-            current_category = None
-            for row_idx in range(18, min(len(self.data), 30)):
-                yayee_val = self.get_cell(row_idx, 9)
-                toey_val = self.get_cell(row_idx, 12)
-
-                # Check if this row is a category header
-                check_val = yayee_val.lower().strip() if yayee_val else ""
-                if check_val == "hot deal":
-                    current_category = "hot_deal"
-                    continue
-                elif check_val == "ctp":
-                    current_category = "ctp"
-                    continue
-                elif check_val == "won":
-                    current_category = "won"
-                    continue
-
-                if current_category:
-                    if yayee_val and yayee_val.lower() not in ["hot deal", "ctp", "won"]:
-                        hot_deals[current_category]["yayee"].append(yayee_val)
-                    if toey_val and toey_val.lower() not in ["hot deal", "ctp", "won"]:
-                        hot_deals[current_category]["toey"].append(toey_val)
-
-            result["hot_deals"] = hot_deals
+            # Parse Hot Deals using range-specific data (merged cell CSV workaround)
+            # Range fetch: J19:O28 -> col 0 = Yayee (J), col 3 = Toey (M)
+            range_data = self.hot_deals_ranges.get("outbound")
+            if range_data:
+                result["hot_deals"] = self._parse_hot_deals_from_range(
+                    range_data, agent1_col=0, agent2_col=3,
+                    agent1_name="yayee", agent2_name="toey"
+                )
+            else:
+                hot_deals = {
+                    "hot_deal": {"yayee": [], "toey": []},
+                    "ctp": {"yayee": [], "toey": []},
+                    "won": {"yayee": [], "toey": []}
+                }
+                current_category = None
+                for row_idx in range(18, min(len(self.data), 30)):
+                    yayee_val = self.get_cell(row_idx, 9)
+                    toey_val = self.get_cell(row_idx, 12)
+                    check_val = yayee_val.lower().strip() if yayee_val else ""
+                    check_val2 = toey_val.lower().strip() if toey_val else ""
+                    if check_val == "hot deal" or check_val2 == "hot deal":
+                        current_category = "hot_deal"
+                        continue
+                    elif check_val == "ctp" or check_val2 == "ctp":
+                        current_category = "ctp"
+                        continue
+                    elif check_val == "won" or check_val2 == "won":
+                        current_category = "won"
+                        continue
+                    if current_category:
+                        if yayee_val and yayee_val.lower() not in ["hot deal", "ctp", "won"]:
+                            hot_deals[current_category]["yayee"].append(yayee_val)
+                        if toey_val and toey_val.lower() not in ["hot deal", "ctp", "won"]:
+                            hot_deals[current_category]["toey"].append(toey_val)
+                result["hot_deals"] = hot_deals
 
         except Exception as e:
             print(f"Error parsing outbound section: {e}", file=sys.stderr)
@@ -215,38 +280,41 @@ class SalesHuddleParser:
                 }
                 result["funnel"].append(metric_data)
 
-            # Parse Hot Deals section (rows 18-28)
-            # Hot deal category headers are in the agent columns (Pleum col 26, Loogpad col 29)
-            hot_deals = {
-                "hot_deal": {"pleum": [], "loogpad": []},
-                "ctp": {"pleum": [], "loogpad": []},
-                "won": {"pleum": [], "loogpad": []}
-            }
-
-            current_category = None
-            for row_idx in range(18, min(len(self.data), 30)):
-                pleum_val = self.get_cell(row_idx, pleum_wtd_col)
-                loogpad_val = self.get_cell(row_idx, loogpad_wtd_col)
-
-                # Check if this row is a category header
-                check_val = pleum_val.lower().strip() if pleum_val else ""
-                if check_val == "hot deal":
-                    current_category = "hot_deal"
-                    continue
-                elif check_val == "ctp":
-                    current_category = "ctp"
-                    continue
-                elif check_val == "won":
-                    current_category = "won"
-                    continue
-
-                if current_category:
-                    if pleum_val and pleum_val.lower() not in ["hot deal", "ctp", "won"]:
-                        hot_deals[current_category]["pleum"].append(pleum_val)
-                    if loogpad_val and loogpad_val.lower() not in ["hot deal", "ctp", "won"]:
-                        hot_deals[current_category]["loogpad"].append(loogpad_val)
-
-            result["hot_deals"] = hot_deals
+            # Parse Hot Deals using range-specific data (merged cell CSV workaround)
+            # Range fetch: AA19:AF28 -> col 0 = Pleum (AA), col 3 = Loogpad (AD)
+            range_data = self.hot_deals_ranges.get("inbound")
+            if range_data:
+                result["hot_deals"] = self._parse_hot_deals_from_range(
+                    range_data, agent1_col=0, agent2_col=3,
+                    agent1_name="pleum", agent2_name="loogpad"
+                )
+            else:
+                hot_deals = {
+                    "hot_deal": {"pleum": [], "loogpad": []},
+                    "ctp": {"pleum": [], "loogpad": []},
+                    "won": {"pleum": [], "loogpad": []}
+                }
+                current_category = None
+                for row_idx in range(18, min(len(self.data), 30)):
+                    pleum_val = self.get_cell(row_idx, pleum_wtd_col)
+                    loogpad_val = self.get_cell(row_idx, loogpad_wtd_col)
+                    check_val = pleum_val.lower().strip() if pleum_val else ""
+                    check_val2 = loogpad_val.lower().strip() if loogpad_val else ""
+                    if check_val == "hot deal" or check_val2 == "hot deal":
+                        current_category = "hot_deal"
+                        continue
+                    elif check_val == "ctp" or check_val2 == "ctp":
+                        current_category = "ctp"
+                        continue
+                    elif check_val == "won" or check_val2 == "won":
+                        current_category = "won"
+                        continue
+                    if current_category:
+                        if pleum_val and pleum_val.lower() not in ["hot deal", "ctp", "won"]:
+                            hot_deals[current_category]["pleum"].append(pleum_val)
+                        if loogpad_val and loogpad_val.lower() not in ["hot deal", "ctp", "won"]:
+                            hot_deals[current_category]["loogpad"].append(loogpad_val)
+                result["hot_deals"] = hot_deals
 
         except Exception as e:
             print(f"Error parsing inbound section: {e}", file=sys.stderr)
@@ -349,36 +417,41 @@ class SalesHuddleParser:
                 }
                 result["funnel"].append(metric_data)
 
-            # Parse Hot Deals section (rows 18-28)
-            hot_deals = {
-                "hot_deal": {"sheronika": [], "thanom": []},
-                "ctp": {"sheronika": [], "thanom": []},
-                "won": {"sheronika": [], "thanom": []}
-            }
-
-            current_category = None
-            for row_idx in range(18, min(len(self.data), 30)):
-                sheronika_val = self.get_cell(row_idx, sheronika_wtd_col)
-                thanom_val = self.get_cell(row_idx, thanom_wtd_col)
-
-                check_val = sheronika_val.lower().strip() if sheronika_val else ""
-                if check_val == "hot deal":
-                    current_category = "hot_deal"
-                    continue
-                elif check_val == "ctp":
-                    current_category = "ctp"
-                    continue
-                elif check_val == "won":
-                    current_category = "won"
-                    continue
-
-                if current_category:
-                    if sheronika_val and sheronika_val.lower() not in ["hot deal", "ctp", "won"]:
-                        hot_deals[current_category]["sheronika"].append(sheronika_val)
-                    if thanom_val and thanom_val.lower() not in ["hot deal", "ctp", "won"]:
-                        hot_deals[current_category]["thanom"].append(thanom_val)
-
-            result["hot_deals"] = hot_deals
+            # Parse Hot Deals using range-specific data (merged cell CSV workaround)
+            # Range fetch: AU19:AZ28 -> col 0 = Sheronika (AU), col 3 = Thanom (AX)
+            range_data = self.hot_deals_ranges.get("intl_inbound")
+            if range_data:
+                result["hot_deals"] = self._parse_hot_deals_from_range(
+                    range_data, agent1_col=0, agent2_col=3,
+                    agent1_name="sheronika", agent2_name="thanom"
+                )
+            else:
+                hot_deals = {
+                    "hot_deal": {"sheronika": [], "thanom": []},
+                    "ctp": {"sheronika": [], "thanom": []},
+                    "won": {"sheronika": [], "thanom": []}
+                }
+                current_category = None
+                for row_idx in range(18, min(len(self.data), 30)):
+                    sheronika_val = self.get_cell(row_idx, sheronika_wtd_col)
+                    thanom_val = self.get_cell(row_idx, thanom_wtd_col)
+                    check_val = sheronika_val.lower().strip() if sheronika_val else ""
+                    check_val2 = thanom_val.lower().strip() if thanom_val else ""
+                    if check_val == "hot deal" or check_val2 == "hot deal":
+                        current_category = "hot_deal"
+                        continue
+                    elif check_val == "ctp" or check_val2 == "ctp":
+                        current_category = "ctp"
+                        continue
+                    elif check_val == "won" or check_val2 == "won":
+                        current_category = "won"
+                        continue
+                    if current_category:
+                        if sheronika_val and sheronika_val.lower() not in ["hot deal", "ctp", "won"]:
+                            hot_deals[current_category]["sheronika"].append(sheronika_val)
+                        if thanom_val and thanom_val.lower() not in ["hot deal", "ctp", "won"]:
+                            hot_deals[current_category]["thanom"].append(thanom_val)
+                result["hot_deals"] = hot_deals
 
         except Exception as e:
             print(f"Error parsing international inbound section: {e}", file=sys.stderr)
@@ -441,36 +514,41 @@ class SalesHuddleParser:
                 }
                 result["funnel"].append(metric_data)
 
-            # Parse Hot Deals section (rows 18-28)
-            hot_deals = {
-                "hot_deal": {"sheronika": [], "thanom": []},
-                "ctp": {"sheronika": [], "thanom": []},
-                "won": {"sheronika": [], "thanom": []}
-            }
-
-            current_category = None
-            for row_idx in range(18, min(len(self.data), 30)):
-                sheronika_val = self.get_cell(row_idx, sheronika_wtd_col)
-                thanom_val = self.get_cell(row_idx, thanom_wtd_col)
-
-                check_val = sheronika_val.lower().strip() if sheronika_val else ""
-                if check_val == "hot deal":
-                    current_category = "hot_deal"
-                    continue
-                elif check_val == "ctp":
-                    current_category = "ctp"
-                    continue
-                elif check_val == "won":
-                    current_category = "won"
-                    continue
-
-                if current_category:
-                    if sheronika_val and sheronika_val.lower() not in ["hot deal", "ctp", "won"]:
-                        hot_deals[current_category]["sheronika"].append(sheronika_val)
-                    if thanom_val and thanom_val.lower() not in ["hot deal", "ctp", "won"]:
-                        hot_deals[current_category]["thanom"].append(thanom_val)
-
-            result["hot_deals"] = hot_deals
+            # Parse Hot Deals using range-specific data (merged cell CSV workaround)
+            # Range fetch: BK19:BP28 -> col 0 = Sheronika (BK), col 3 = Thanom (BN)
+            range_data = self.hot_deals_ranges.get("intl_outbound")
+            if range_data:
+                result["hot_deals"] = self._parse_hot_deals_from_range(
+                    range_data, agent1_col=0, agent2_col=3,
+                    agent1_name="sheronika", agent2_name="thanom"
+                )
+            else:
+                hot_deals = {
+                    "hot_deal": {"sheronika": [], "thanom": []},
+                    "ctp": {"sheronika": [], "thanom": []},
+                    "won": {"sheronika": [], "thanom": []}
+                }
+                current_category = None
+                for row_idx in range(18, min(len(self.data), 30)):
+                    sheronika_val = self.get_cell(row_idx, sheronika_wtd_col)
+                    thanom_val = self.get_cell(row_idx, thanom_wtd_col)
+                    check_val = sheronika_val.lower().strip() if sheronika_val else ""
+                    check_val2 = thanom_val.lower().strip() if thanom_val else ""
+                    if check_val == "hot deal" or check_val2 == "hot deal":
+                        current_category = "hot_deal"
+                        continue
+                    elif check_val == "ctp" or check_val2 == "ctp":
+                        current_category = "ctp"
+                        continue
+                    elif check_val == "won" or check_val2 == "won":
+                        current_category = "won"
+                        continue
+                    if current_category:
+                        if sheronika_val and sheronika_val.lower() not in ["hot deal", "ctp", "won"]:
+                            hot_deals[current_category]["sheronika"].append(sheronika_val)
+                        if thanom_val and thanom_val.lower() not in ["hot deal", "ctp", "won"]:
+                            hot_deals[current_category]["thanom"].append(thanom_val)
+                result["hot_deals"] = hot_deals
 
         except Exception as e:
             print(f"Error parsing international outbound section: {e}", file=sys.stderr)
@@ -1332,7 +1410,18 @@ def main():
     }
 
     if sales_sheet:
-        parser = SalesHuddleParser(sales_sheet)
+        # Fetch hot deals sections with range-specific queries to work around
+        # Google Sheets merged cell CSV export issues that drop agent data
+        sales_sheet_id = "1A33NpnkZlgrwyDSOKn3nwB0u5mFtal2BlVC0nGZL7Xk"
+        print("Fetching Hot Deals ranges (merged cell workaround)...")
+        hot_deals_ranges = {
+            "outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="J19:O28"),
+            "inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AA19:AF28"),
+            "intl_inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AU19:AZ28"),
+            "intl_outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="BK19:BP28"),
+        }
+
+        parser = SalesHuddleParser(sales_sheet, hot_deals_ranges=hot_deals_ranges)
         date_info = parser.get_date_info()
         sales_data["date"] = date_info.get("date", sales_data["date"])
         sales_data["outbound"] = parser.parse_outbound_section()
