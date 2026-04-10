@@ -1305,10 +1305,19 @@ class SlackNotifier:
             intl_outbound_funnel = sales_data.get("intl_outbound", {}).get("funnel", [])
             intl_inbound_funnel = sales_data.get("intl_inbound", {}).get("funnel", [])
 
-            outbound_won = outbound_funnel[-1].get("total_wtd", "0") if outbound_funnel else "0"
-            inbound_won = inbound_funnel[-1].get("total_wtd", "0") if inbound_funnel else "0"
-            intl_out_won = intl_outbound_funnel[-1].get("total_wtd", "0") if intl_outbound_funnel else "0"
-            intl_in_won = intl_inbound_funnel[-1].get("total_wtd", "0") if intl_inbound_funnel else "0"
+            # Find Won metric by name (international sections have extra rows after Won)
+            def find_won_wtd(funnel):
+                for m in funnel:
+                    if m.get("name", "").lower().strip() == "won":
+                        val = m.get("total_wtd", "0")
+                        return val if val and val != "-" else "0"
+                # Fallback: last metric
+                return funnel[-1].get("total_wtd", "0") if funnel else "0"
+
+            outbound_won = find_won_wtd(outbound_funnel)
+            inbound_won = find_won_wtd(inbound_funnel)
+            intl_out_won = find_won_wtd(intl_outbound_funnel)
+            intl_in_won = find_won_wtd(intl_inbound_funnel)
 
             outbound_contact = outbound_funnel[1].get("total_wtd", "0") if len(outbound_funnel) > 1 else "0"
             inbound_contact = inbound_funnel[1].get("total_wtd", "0") if len(inbound_funnel) > 1 else "0"
@@ -1415,10 +1424,10 @@ def main():
         sales_sheet_id = "1A33NpnkZlgrwyDSOKn3nwB0u5mFtal2BlVC0nGZL7Xk"
         print("Fetching Hot Deals ranges (merged cell workaround)...")
         hot_deals_ranges = {
-            "outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="J19:O28"),
-            "inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AA19:AF28"),
-            "intl_inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AU19:AZ28"),
-            "intl_outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="BK19:BP28"),
+            "outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="J19:O40"),
+            "inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AA19:AF40"),
+            "intl_inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AU19:AZ40"),
+            "intl_outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="BK19:BP40"),
         }
 
         parser = SalesHuddleParser(sales_sheet, hot_deals_ranges=hot_deals_ranges)
