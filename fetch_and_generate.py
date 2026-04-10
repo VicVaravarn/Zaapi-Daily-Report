@@ -1424,10 +1424,10 @@ def main():
         sales_sheet_id = "1A33NpnkZlgrwyDSOKn3nwB0u5mFtal2BlVC0nGZL7Xk"
         print("Fetching Hot Deals ranges (merged cell workaround)...")
         hot_deals_ranges = {
-            "outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="J19:O40"),
-            "inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AA19:AF40"),
-            "intl_inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AU19:AZ40"),
-            "intl_outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="BK19:BP40"),
+            "outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="J19:O55"),
+            "inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AA19:AF55"),
+            "intl_inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AU19:AZ55"),
+            "intl_outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="BK19:BP55"),
         }
 
         parser = SalesHuddleParser(sales_sheet, hot_deals_ranges=hot_deals_ranges)
