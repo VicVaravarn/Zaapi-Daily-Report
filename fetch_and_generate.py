@@ -10,6 +10,8 @@ import io
 import json
 import argparse
 import requests
+import tempfile
+import os
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from typing import Dict, List, Tuple, Optional, Any
@@ -51,6 +53,25 @@ class GoogleSheetsFetcher:
         except Exception as e:
             range_label = f" range '{cell_range}'" if cell_range else ""
             print(f"Error fetching sheet '{sheet_name}'{range_label}: {e}", file=sys.stderr)
+            return None
+
+    def fetch_sheet_xlsx(self, sheet_id: str) -> Optional[Any]:
+        """Fetch a Google Sheet as XLSX to access cell formatting (e.g., background colors)."""
+        try:
+            url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+            response = self.session.get(url, timeout=60)
+            response.raise_for_status()
+
+            tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+            tmp.write(response.content)
+            tmp.close()
+
+            from openpyxl import load_workbook
+            wb = load_workbook(tmp.name, data_only=True)
+            os.unlink(tmp.name)
+            return wb
+        except Exception as e:
+            print(f"Error fetching XLSX: {e}", file=sys.stderr)
             return None
 
     def get_current_week_sheet_name(self) -> str:
@@ -321,40 +342,118 @@ class SalesHuddleParser:
 
         return result
 
-    def parse_renewal_section(self) -> Dict[str, Any]:
-        """Parse the Account Management - Renewal section."""
-        result = {"won": {}, "due_to_renew": []}
+    def parse_renewal_section(self, renewal_range_data=None, green_cells=None) -> Dict[str, Any]:
+        """Parse the Account Management - Renewal section.
+
+        Args:
+            renewal_range_data: CSV data from range R58:AF100 (optional, uses range-specific fetch)
+            green_cells: Set of account names that have green background (confirmed to renew)
+        """
+        result = {
+            "header_date": "",
+            "won": {},
+            "due_to_renew": {"pleum": [], "loogpad": []},
+            "renewed": {"pleum": [], "loogpad": []},
+            "churned": {"pleum": [], "loogpad": []}
+        }
+
+        if green_cells is None:
+            green_cells = set()
+
+        data = renewal_range_data if renewal_range_data else self.data
 
         try:
-            # Renewal section starts around row 57
-            renewal_start = 57
+            if not data or len(data) == 0:
+                return result
 
-            # Find the renewal section
-            for row_idx in range(renewal_start, min(len(self.data), 70)):
-                label = self.get_cell(row_idx, 1)
-                if "Renewal" in label or "Account Management" in label:
-                    # Found the section, parse won data from next rows
-                    won_row = row_idx + 2  # Usually 2 rows after header
-                    result["won"] = {
-                        "total_wtd": self.get_cell(won_row, 2),
-                        "total_daily": self.get_cell(won_row, 3),
-                        "pleum_wtd": self.get_cell(won_row, 4),
-                        "pleum_daily": self.get_cell(won_row, 5),
-                        "loogpad_wtd": self.get_cell(won_row, 6),
-                        "loogpad_daily": self.get_cell(won_row, 7)
-                    }
+            # If using range data (R58:AF), columns are 0-indexed within range
+            # Col 0=R, 1=S, ..., 5=W, 6=X, 7=Y, 9=AA, 10=AB, 12=AD, 13=AE
 
-                    # Parse due to renew accounts
-                    due_start = won_row + 2
-                    for acc_row in range(due_start, min(len(self.data), due_start + 10)):
-                        account_name = self.get_cell(acc_row, 2)
-                        renewal_date = self.get_cell(acc_row, 3)
-                        if account_name:
-                            result["due_to_renew"].append({
-                                "name": account_name,
-                                "date": renewal_date
-                            })
-                    break
+            def get_val(row_idx, col_idx):
+                if row_idx < len(data) and col_idx < len(data[row_idx]):
+                    return data[row_idx][col_idx].strip()
+                return ""
+
+            # Row 0: Header - extract date
+            header = get_val(0, 0)
+            if header:
+                # Extract date from "Account Management - Renewal 21/04/2026"
+                parts = header.split()
+                for part in parts:
+                    if "/" in part and len(part) >= 8:
+                        result["header_date"] = part
+                        break
+
+            # Row 1: Won metrics
+            won_label = get_val(1, 5)
+            if won_label.lower().strip() == "won":
+                result["won"] = {
+                    "total_wtd": get_val(1, 6),
+                    "total_daily": get_val(1, 7),
+                    "pleum_wtd": get_val(1, 9),
+                    "pleum_daily": get_val(1, 10),
+                    "loogpad_wtd": get_val(1, 12),
+                    "loogpad_daily": get_val(1, 13)
+                }
+
+            # Parse sections: due_to_renew, renewed, churned
+            current_section = "due_to_renew"  # Default starting section
+
+            for row_idx in range(2, len(data)):
+                # Check for section headers
+                label_col1 = get_val(row_idx, 1).lower().strip()
+
+                if "due to renew" in label_col1:
+                    current_section = "due_to_renew"
+                    continue
+                elif "renewed" in label_col1 and "not" not in label_col1:
+                    current_section = "renewed"
+                    continue
+                elif "churned" in label_col1:
+                    current_section = "churned"
+                    continue
+                elif "have not reached" in label_col1 or "not reached" in label_col1:
+                    break  # Stop parsing after this
+
+                if current_section == "due_to_renew":
+                    # Pleum: date in col9, name in col10
+                    pleum_date = get_val(row_idx, 9)
+                    pleum_name = get_val(row_idx, 10)
+                    if pleum_name:
+                        confirmed = pleum_name in green_cells
+                        result["due_to_renew"]["pleum"].append({
+                            "name": pleum_name,
+                            "date": pleum_date,
+                            "confirmed": confirmed
+                        })
+
+                    # Loogpad: date in col12, name in col13
+                    loogpad_date = get_val(row_idx, 12)
+                    loogpad_name = get_val(row_idx, 13)
+                    if loogpad_name:
+                        confirmed = loogpad_name in green_cells
+                        result["due_to_renew"]["loogpad"].append({
+                            "name": loogpad_name,
+                            "date": loogpad_date,
+                            "confirmed": confirmed
+                        })
+
+                elif current_section == "renewed":
+                    # Renewed: name in col9 (Pleum), col12 (Loogpad) - no dates
+                    pleum_name = get_val(row_idx, 9)
+                    loogpad_name = get_val(row_idx, 12)
+                    if pleum_name:
+                        result["renewed"]["pleum"].append(pleum_name)
+                    if loogpad_name:
+                        result["renewed"]["loogpad"].append(loogpad_name)
+
+                elif current_section == "churned":
+                    pleum_name = get_val(row_idx, 9)
+                    loogpad_name = get_val(row_idx, 12)
+                    if pleum_name:
+                        result["churned"]["pleum"].append(pleum_name)
+                    if loogpad_name:
+                        result["churned"]["loogpad"].append(loogpad_name)
 
         except Exception as e:
             print(f"Error parsing renewal section: {e}", file=sys.stderr)
@@ -913,6 +1012,7 @@ class HTMLDashboardGenerator:
         {self._generate_summary_cards(sales_data, marketing_data)}
         {self._generate_marketing_section(marketing_data)}
         {self._generate_sales_sections(sales_data)}
+        {self._generate_renewal_section(sales_data)}
         {self._generate_intl_sales_sections(sales_data)}
         {self._generate_footer()}
     </div>
@@ -995,7 +1095,8 @@ class HTMLDashboardGenerator:
 
         # Outbound Section
         html += '<div class="section">'
-        html += '<div class="section-title">Sales - Outbound</div>'
+        sales_date = datetime.now().strftime("%d/%m/%y")
+        html += f'<div class="section-title">Sales - Outbound ({sales_date})</div>'
 
         outbound = sales_data.get("outbound")
         if outbound and outbound.get("funnel"):
@@ -1037,7 +1138,7 @@ class HTMLDashboardGenerator:
 
         # Inbound Section
         html += '<div class="section">'
-        html += '<div class="section-title">Sales - Inbound</div>'
+        html += f'<div class="section-title">Sales - Inbound ({sales_date})</div>'
 
         inbound = sales_data.get("inbound")
         if inbound and inbound.get("funnel"):
@@ -1079,13 +1180,172 @@ class HTMLDashboardGenerator:
 
         return html
 
+    def _generate_renewal_section(self, sales_data: Dict[str, Any]) -> str:
+        """Generate the TH Account Management - Renewal section."""
+        html = '<div class="section">'
+
+        renewal = sales_data.get("renewal", {})
+        header_date = renewal.get("header_date", "")
+        date_label = f" ({header_date})" if header_date else ""
+        html += f'<div class="section-title">TH Account Management - Renewal{date_label}</div>'
+
+        if not renewal or (not renewal.get("due_to_renew", {}).get("pleum") and
+                          not renewal.get("due_to_renew", {}).get("loogpad") and
+                          not renewal.get("renewed", {}).get("pleum") and
+                          not renewal.get("renewed", {}).get("loogpad")):
+            html += '<div class="unavailable">Data unavailable</div>'
+            html += '</div>'
+            return html
+
+        # Won metrics summary
+        won = renewal.get("won", {})
+        won_total = self.safe_number(won.get("total_wtd", "0"))
+        won_pleum = self.safe_number(won.get("pleum_wtd", "0"))
+        won_loogpad = self.safe_number(won.get("loogpad_wtd", "0"))
+
+        if won_total != "0" or won_pleum != "0" or won_loogpad != "0":
+            html += f'<div style="margin-bottom: 15px; padding: 10px; background: rgba(34, 197, 94, 0.1); border-radius: 6px; border-left: 4px solid #22c55e;">'
+            html += f'<span style="font-weight: 600; color: #22c55e;">Won Renewals WTD:</span> '
+            html += f'Total: <strong>{won_total}</strong> | Pleum: <strong>{won_pleum}</strong> | Loogpad: <strong>{won_loogpad}</strong>'
+            html += '</div>'
+
+        # Due to Renew table
+        due_pleum = renewal.get("due_to_renew", {}).get("pleum", [])
+        due_loogpad = renewal.get("due_to_renew", {}).get("loogpad", [])
+
+        if due_pleum or due_loogpad:
+            html += '<h3 style="font-size: 1.1em; margin: 15px 0 10px; color: #94a3b8;">Due to Renew This Week</h3>'
+            html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">'
+
+            # Pleum column
+            html += '<div>'
+            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px; font-size: 1.05em;">Pleum</div>'
+            if due_pleum:
+                html += '<table style="width: 100%;">'
+                html += '<thead><tr><th style="text-align: left; font-size: 0.8em;">Date</th>'
+                html += '<th style="text-align: left; font-size: 0.8em;">Account</th>'
+                html += '<th style="text-align: center; font-size: 0.8em;">Status</th></tr></thead><tbody>'
+                for item in due_pleum:
+                    name = item.get("name", "")
+                    date = item.get("date", "")
+                    confirmed = item.get("confirmed", False)
+                    if confirmed:
+                        row_style = 'style="background: rgba(34, 197, 94, 0.15);"'
+                        status_badge = '<span style="background: #22c55e; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600;">Confirmed</span>'
+                    else:
+                        row_style = ''
+                        status_badge = '<span style="color: #94a3b8; font-size: 0.8em;">Pending</span>'
+                    html += f'<tr {row_style}><td style="font-size: 0.85em; color: #94a3b8; white-space: nowrap;">{date}</td>'
+                    html += f'<td style="font-weight: 500;">{name}</td>'
+                    html += f'<td style="text-align: center;">{status_badge}</td></tr>'
+                html += '</tbody></table>'
+            else:
+                html += '<div style="color: #64748b; font-style: italic; padding: 10px;">No accounts due</div>'
+            html += '</div>'
+
+            # Loogpad column
+            html += '<div>'
+            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px; font-size: 1.05em;">Loogpad</div>'
+            if due_loogpad:
+                html += '<table style="width: 100%;">'
+                html += '<thead><tr><th style="text-align: left; font-size: 0.8em;">Date</th>'
+                html += '<th style="text-align: left; font-size: 0.8em;">Account</th>'
+                html += '<th style="text-align: center; font-size: 0.8em;">Status</th></tr></thead><tbody>'
+                for item in due_loogpad:
+                    name = item.get("name", "")
+                    date = item.get("date", "")
+                    confirmed = item.get("confirmed", False)
+                    if confirmed:
+                        row_style = 'style="background: rgba(34, 197, 94, 0.15);"'
+                        status_badge = '<span style="background: #22c55e; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600;">Confirmed</span>'
+                    else:
+                        row_style = ''
+                        status_badge = '<span style="color: #94a3b8; font-size: 0.8em;">Pending</span>'
+                    html += f'<tr {row_style}><td style="font-size: 0.85em; color: #94a3b8; white-space: nowrap;">{date}</td>'
+                    html += f'<td style="font-weight: 500;">{name}</td>'
+                    html += f'<td style="text-align: center;">{status_badge}</td></tr>'
+                html += '</tbody></table>'
+            else:
+                html += '<div style="color: #64748b; font-style: italic; padding: 10px;">No accounts due</div>'
+            html += '</div>'
+
+            html += '</div>'  # Close grid
+
+        # Renewed section
+        renewed_pleum = renewal.get("renewed", {}).get("pleum", [])
+        renewed_loogpad = renewal.get("renewed", {}).get("loogpad", [])
+
+        if renewed_pleum or renewed_loogpad:
+            html += '<h3 style="font-size: 1.1em; margin: 20px 0 10px; color: #22c55e;">&#10003; Renewed</h3>'
+            html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">'
+
+            html += '<div>'
+            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Pleum</div>'
+            if renewed_pleum:
+                html += '<div class="account-list">'
+                for name in renewed_pleum:
+                    html += f'<span class="account-tag" style="border-color: #22c55e; background: rgba(34, 197, 94, 0.15);">{name}</span>'
+                html += '</div>'
+            else:
+                html += '<div style="color: #64748b; font-style: italic;">-</div>'
+            html += '</div>'
+
+            html += '<div>'
+            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Loogpad</div>'
+            if renewed_loogpad:
+                html += '<div class="account-list">'
+                for name in renewed_loogpad:
+                    html += f'<span class="account-tag" style="border-color: #22c55e; background: rgba(34, 197, 94, 0.15);">{name}</span>'
+                html += '</div>'
+            else:
+                html += '<div style="color: #64748b; font-style: italic;">-</div>'
+            html += '</div>'
+
+            html += '</div>'
+
+        # Churned section
+        churned_pleum = renewal.get("churned", {}).get("pleum", [])
+        churned_loogpad = renewal.get("churned", {}).get("loogpad", [])
+
+        if churned_pleum or churned_loogpad:
+            html += '<h3 style="font-size: 1.1em; margin: 20px 0 10px; color: #ef4444;">Churned</h3>'
+            html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">'
+
+            html += '<div>'
+            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Pleum</div>'
+            if churned_pleum:
+                html += '<div class="account-list">'
+                for name in churned_pleum:
+                    html += f'<span class="account-tag" style="border-color: #ef4444; background: rgba(239, 68, 68, 0.15);">{name}</span>'
+                html += '</div>'
+            else:
+                html += '<div style="color: #64748b; font-style: italic;">-</div>'
+            html += '</div>'
+
+            html += '<div>'
+            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Loogpad</div>'
+            if churned_loogpad:
+                html += '<div class="account-list">'
+                for name in churned_loogpad:
+                    html += f'<span class="account-tag" style="border-color: #ef4444; background: rgba(239, 68, 68, 0.15);">{name}</span>'
+                html += '</div>'
+            else:
+                html += '<div style="color: #64748b; font-style: italic;">-</div>'
+            html += '</div>'
+
+            html += '</div>'
+
+        html += '</div>'  # Close section
+        return html
+
     def _generate_intl_sales_sections(self, sales_data: Dict[str, Any]) -> str:
         """Generate international sales sections (outbound and inbound)."""
         html = ""
 
         # International Outbound Section
         html += '<div class="section">'
-        html += '<div class="section-title">International Sales - Outbound</div>'
+        sales_date = datetime.now().strftime("%d/%m/%y")
+        html += f'<div class="section-title">International Sales - Outbound ({sales_date})</div>'
 
         intl_outbound = sales_data.get("intl_outbound")
         if intl_outbound and intl_outbound.get("funnel"):
@@ -1127,7 +1387,7 @@ class HTMLDashboardGenerator:
 
         # International Inbound Section
         html += '<div class="section">'
-        html += '<div class="section-title">International Sales - Inbound</div>'
+        html += f'<div class="section-title">International Sales - Inbound ({sales_date})</div>'
 
         intl_inbound = sales_data.get("intl_inbound")
         if intl_inbound and intl_inbound.get("funnel"):
@@ -1226,7 +1486,9 @@ class HTMLDashboardGenerator:
     def _generate_marketing_section(self, marketing_data: Dict[str, Any]) -> str:
         """Generate the marketing sign-ups section."""
         html = '<div class="section">'
-        html += '<div class="section-title">Marketing - Lead Overview</div>'
+        # Marketing data is 1 day behind
+        marketing_date = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%y")
+        html += f'<div class="section-title">Marketing - Lead Overview ({marketing_date})</div>'
 
         regions_data = marketing_data.get("regions", {})
 
@@ -1430,12 +1692,57 @@ def main():
             "intl_outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="BK19:BP55"),
         }
 
+        # Fetch renewal section data with range-specific query
+        print("Fetching Renewal section data...")
+        renewal_range = fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="R58:AF100")
+
+        # Fetch XLSX for green cell detection (confirmed renewals)
+        print("Fetching XLSX for renewal formatting...")
+        green_cells = set()
+        try:
+            wb = fetcher.fetch_sheet_xlsx(sales_sheet_id)
+            if wb and week_name in wb.sheetnames:
+                ws = wb[week_name]
+                # Check account name columns (AB=28, AE=31) for green background
+                # Due to renew entries start at row 61 in the actual sheet
+                for row in range(61, 100):
+                    for col in [28, 31]:  # AB and AE columns
+                        cell = ws.cell(row=row, column=col)
+                        name = str(cell.value).strip() if cell.value else ""
+                        if name and cell.fill and cell.fill.fgColor:
+                            rgb = str(cell.fill.fgColor.rgb) if cell.fill.fgColor.rgb else ""
+                            if len(rgb) >= 6:
+                                try:
+                                    # Handle both 6-char and 8-char RGB (with alpha prefix)
+                                    if len(rgb) == 8:
+                                        r_val = int(rgb[2:4], 16)
+                                        g_val = int(rgb[4:6], 16)
+                                        b_val = int(rgb[6:8], 16)
+                                    else:
+                                        r_val = int(rgb[0:2], 16)
+                                        g_val = int(rgb[2:4], 16)
+                                        b_val = int(rgb[4:6], 16)
+                                    # Green if green component is dominant
+                                    if g_val > r_val and g_val > b_val and g_val > 100:
+                                        green_cells.add(name)
+                                except (ValueError, IndexError):
+                                    pass
+                wb.close()
+        except Exception as e:
+            print(f"Warning: Could not detect green cells: {e}", file=sys.stderr)
+
+        if green_cells:
+            print(f"Found {len(green_cells)} confirmed renewal(s): {green_cells}")
+
         parser = SalesHuddleParser(sales_sheet, hot_deals_ranges=hot_deals_ranges)
         date_info = parser.get_date_info()
         sales_data["date"] = date_info.get("date", sales_data["date"])
         sales_data["outbound"] = parser.parse_outbound_section()
         sales_data["inbound"] = parser.parse_inbound_section()
-        sales_data["renewal"] = parser.parse_renewal_section()
+        sales_data["renewal"] = parser.parse_renewal_section(
+            renewal_range_data=renewal_range,
+            green_cells=green_cells
+        )
         sales_data["intl_outbound"] = parser.parse_intl_outbound_section()
         sales_data["intl_inbound"] = parser.parse_intl_inbound_section()
     else:
