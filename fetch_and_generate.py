@@ -655,71 +655,306 @@ class SalesHuddleParser:
         return result
 
 
-class MarketingSignupsParser:
-    """Parses Marketing Sign-ups sheet data."""
+class RegistrationWeeklyParser:
+    """Parses the registration_weekly tab of the Ads Data sheet.
 
-    def __init__(self, sheet_data: List[List[str]]):
+    Source sheet: 1s5AC58mAylpSDknU7L7HRJUPrVf36b0TvzD35tW-Wdw
+    Tab: registration_weekly
+
+    Columns (1-indexed):
+      A cw, B week_start_mon, C week_end_sun, D region, E market,
+      F ad_source, G ad_campaign_id,
+      H verified, I integrated, J qualified, K highly_qualified,
+      L premium, M best, N hqplus, O total
+
+    Aggregates the current ISO-week rows into:
+      - GLOBAL (grand total)
+      - TH, SEA, ROW (region rollups)
+      - MY, SG, PH (SEA submarkets)
+      - ROW submarkets by country (BR, DE, CH, …)
+
+    NOTE: We bucket by *market* (column E), not the region column, because the
+    current-week feed sometimes tags rows as region=ROW with country names like
+    THAILAND/MALAYSIA in the market column. Bucketing by market makes the
+    dashboard self-correcting against that tagging issue.
+
+    For each bucket we compute:
+      - qualified           = sum(col J)
+      - hqplus              = sum(col N)
+      - total               = qualified + hqplus   (per spec — not col O)
+      - attributed          = total contribution from rows with ad_source set
+      - unattributed        = total contribution from rows with blank/unknown
+                              ad_source
+    Attributed + Unattributed = Total.
+    """
+
+    # Markets that belong to the TH or SEA buckets. Anything else falls into ROW.
+    # Accepts both 2-letter codes and full country names (uppercased).
+    TH_MARKETS = {"TH", "THAILAND"}
+    SEA_SUBMARKET_MAP = {
+        "MY": "MY", "MALAYSIA": "MY",
+        "SG": "SG", "SINGAPORE": "SG",
+        "PH": "PH", "PHILIPPINES": "PH",
+    }
+    SEA_OTHER_MARKETS = {
+        "ID", "INDONESIA",
+        "VN", "VIETNAM",
+        "MM", "MYANMAR",
+        "KH", "CAMBODIA",
+        "LA", "LAOS",
+        "BN", "BRUNEI",
+        "TL", "TP", "EAST TIMOR",
+    }
+
+    # Country name → ISO alpha-2 code for ROW (and a few SEA aliases). Used to
+    # label ROW sub-rows. If a market value is already a 2-letter code we use
+    # it directly.
+    COUNTRY_NAME_TO_CODE = {
+        # SEA aliases (defensive)
+        "THAILAND": "TH", "MALAYSIA": "MY", "SINGAPORE": "SG",
+        "PHILIPPINES": "PH", "INDONESIA": "ID", "VIETNAM": "VN",
+        "MYANMAR": "MM", "CAMBODIA": "KH", "LAOS": "LA", "BRUNEI": "BN",
+        "EAST TIMOR": "TL",
+        # ROW
+        "INDIA": "IN",
+        "UNITED STATES OF AMERICA": "US", "UNITED STATES": "US", "USA": "US",
+        "UNITED KINGDOM": "UK", "GREAT BRITAIN": "UK",
+        "GERMANY": "DE", "SWITZERLAND": "CH", "AUSTRIA": "AT",
+        "FRANCE": "FR", "NETHERLANDS": "NL", "BELGIUM": "BE",
+        "ITALY": "IT", "SPAIN": "ES", "PORTUGAL": "PT", "POLAND": "PL",
+        "SWEDEN": "SE", "NORWAY": "NO", "DENMARK": "DK", "FINLAND": "FI",
+        "IRELAND": "IE", "GREECE": "GR", "CZECH REPUBLIC": "CZ",
+        "HUNGARY": "HU", "ROMANIA": "RO", "BULGARIA": "BG",
+        "UKRAINE": "UA", "RUSSIA": "RU", "TURKEY": "TR",
+        "JAPAN": "JP", "CHINA": "CN", "SOUTH KOREA": "KR", "KOREA": "KR",
+        "HONG KONG": "HK", "TAIWAN": "TW", "MACAU": "MO", "MONGOLIA": "MN",
+        "BANGLADESH": "BD", "PAKISTAN": "PK", "SRI LANKA": "LK",
+        "NEPAL": "NP", "AFGHANISTAN": "AF",
+        "KAZAKHSTAN": "KZ", "KYRGYZSTAN": "KG", "UZBEKISTAN": "UZ",
+        "AUSTRALIA": "AU", "NEW ZEALAND": "NZ",
+        "CANADA": "CA", "MEXICO": "MX",
+        "BRAZIL": "BR", "ARGENTINA": "AR", "CHILE": "CL",
+        "COLOMBIA": "CO", "PERU": "PE", "VENEZUELA": "VE",
+        "ECUADOR": "EC", "URUGUAY": "UY",
+        "SOUTH AFRICA": "ZA", "NIGERIA": "NG", "EGYPT": "EG",
+        "KENYA": "KE", "MOROCCO": "MA", "GHANA": "GH",
+        "ALGERIA": "DZ", "TUNISIA": "TN", "ETHIOPIA": "ET",
+        "UGANDA": "UG", "TANZANIA": "TZ",
+        "UNITED ARAB EMIRATES": "AE", "UAE": "AE",
+        "SAUDI ARABIA": "SA", "ISRAEL": "IL",
+        "IRAN": "IR", "IRAQ": "IQ", "JORDAN": "JO", "LEBANON": "LB",
+        "SYRIA": "SY", "YEMEN": "YE",
+        "QATAR": "QA", "KUWAIT": "KW", "BAHRAIN": "BH", "OMAN": "OM",
+        "PALAU": "PW", "FIJI": "FJ",
+        "UNKNOWN": "??",
+    }
+
+    # Reverse map (code → friendly label) for display.
+    CODE_TO_LABEL = {
+        "US": "United States", "UK": "United Kingdom",
+        "DE": "Germany", "CH": "Switzerland",
+        "FR": "France", "NL": "Netherlands", "BE": "Belgium",
+        "IT": "Italy", "ES": "Spain", "PT": "Portugal", "PL": "Poland",
+        "SE": "Sweden", "NO": "Norway", "DK": "Denmark", "FI": "Finland",
+        "AT": "Austria",
+        "IN": "India", "PK": "Pakistan", "BD": "Bangladesh",
+        "NP": "Nepal", "LK": "Sri Lanka", "AF": "Afghanistan",
+        "JP": "Japan", "CN": "China", "KR": "South Korea",
+        "HK": "Hong Kong", "TW": "Taiwan", "MO": "Macau", "MN": "Mongolia",
+        "KZ": "Kazakhstan", "KG": "Kyrgyzstan", "UZ": "Uzbekistan",
+        "AU": "Australia", "NZ": "New Zealand",
+        "CA": "Canada", "MX": "Mexico",
+        "BR": "Brazil", "AR": "Argentina", "CL": "Chile",
+        "CO": "Colombia", "PE": "Peru", "VE": "Venezuela",
+        "EC": "Ecuador", "UY": "Uruguay",
+        "ZA": "South Africa", "NG": "Nigeria", "EG": "Egypt",
+        "KE": "Kenya", "MA": "Morocco", "GH": "Ghana",
+        "DZ": "Algeria", "TN": "Tunisia", "ET": "Ethiopia",
+        "UG": "Uganda", "TZ": "Tanzania",
+        "AE": "UAE", "SA": "Saudi Arabia", "IL": "Israel",
+        "IR": "Iran", "IQ": "Iraq", "JO": "Jordan", "LB": "Lebanon",
+        "SY": "Syria", "YE": "Yemen",
+        "QA": "Qatar", "KW": "Kuwait", "BH": "Bahrain", "OM": "Oman",
+        "PW": "Palau", "FJ": "Fiji",
+        "TR": "Turkey", "RU": "Russia", "UA": "Ukraine",
+        "GR": "Greece", "CZ": "Czechia", "HU": "Hungary",
+        "RO": "Romania", "BG": "Bulgaria", "IE": "Ireland",
+        "??": "Unknown",
+    }
+
+    # ad_source values that mean "we don't actually know the source".
+    UNATTRIBUTED_AD_SOURCES = {"", "UNKNOWN", "NONE", "N/A"}
+
+    def __init__(self, sheet_data: List[List[str]], week_start_mon: str):
         self.data = sheet_data
+        self.week_start_mon = week_start_mon
 
-    def get_cell(self, row: int, col: int) -> str:
-        """Safely get a cell value."""
+    @staticmethod
+    def _to_int(value: str) -> int:
         try:
-            if row < len(self.data) and col < len(self.data[row]):
-                return self.data[row][col].strip()
-            return ""
-        except:
-            return ""
+            return int(float(str(value).replace(",", "").strip() or "0"))
+        except (ValueError, TypeError):
+            return 0
 
-    def parse_data(self) -> Dict[str, Any]:
-        """Parse the marketing sign-ups data."""
-        result = {
-            "date": "",
-            "regions": {},
-            "total": {}
+    # Bucket logic ---------------------------------------------------------
+
+    def _classify_market(self, market: str):
+        """Return (region, submarket, country_code).
+
+        region        ∈ {"TH", "SEA", "ROW"}
+        submarket     ∈ {"MY", "SG", "PH"} or None  (only set for SEA majors)
+        country_code  ISO alpha-2 (or fallback) — only meaningful for ROW;
+                      for SEA/TH this is left to the caller (we don't break
+                      out non-major SEA countries).
+        """
+        if not market:
+            return ("ROW", None, "??")
+        key = market.strip().upper()
+        if key in self.TH_MARKETS:
+            return ("TH", None, "TH")
+        if key in self.SEA_SUBMARKET_MAP:
+            sub = self.SEA_SUBMARKET_MAP[key]
+            return ("SEA", sub, sub)
+        if key in self.SEA_OTHER_MARKETS:
+            return ("SEA", None, key if len(key) == 2 else
+                    self.COUNTRY_NAME_TO_CODE.get(key, key[:2]))
+        # ROW
+        if len(key) == 2 and key.isalpha():
+            code = key
+        else:
+            code = self.COUNTRY_NAME_TO_CODE.get(key)
+            if not code:
+                # Fallback: first 2 alpha chars uppercase, or "??".
+                code = "".join(c for c in key if c.isalpha())[:2].upper() or "??"
+        return ("ROW", None, code)
+
+    def _label_for_country(self, code: str, raw_market: str) -> str:
+        label = self.CODE_TO_LABEL.get(code)
+        if label:
+            return label
+        # Fallback to titlecasing the raw market name.
+        return raw_market.strip().title() if raw_market else code
+
+    def _is_attributed(self, ad_source: str) -> bool:
+        return ad_source.strip().upper() not in self.UNATTRIBUTED_AD_SOURCES
+
+    # Aggregation ---------------------------------------------------------
+
+    @staticmethod
+    def _empty_bucket():
+        return {
+            "qualified_wtd": 0,
+            "hqplus_wtd": 0,
+            "total_wtd": 0,          # = qualified + hqplus per spec
+            "attributed_wtd": 0,
+            "unattributed_wtd": 0,
         }
 
+    @classmethod
+    def _stringify(cls, bucket: Dict[str, int]) -> Dict[str, str]:
+        return {k: str(v) for k, v in bucket.items()}
+
+    def parse_data(self) -> Dict[str, Any]:
+        # Fixed-order buckets always present in the table.
+        fixed_regions = ["GLOBAL", "TH", "SEA", "MY", "SG", "PH", "ROW"]
+        regions: Dict[str, Dict[str, int]] = {
+            r: self._empty_bucket() for r in fixed_regions
+        }
+        # ROW sub-buckets discovered dynamically by country code.
+        row_countries: Dict[str, Dict[str, Any]] = {}
+        # Track best raw_market label seen for each ROW country code.
+        row_country_labels: Dict[str, str] = {}
+
+        result = {
+            "date": self.week_start_mon,
+            "regions": regions,
+            "row_countries": [],   # ordered list of {code,label,...stats}
+            "total": self._empty_bucket(),
+        }
+
+        if not self.data or len(self.data) < 2:
+            print("Warning: registration_weekly is empty/header-only",
+                  file=sys.stderr)
+            return self._finalize(result, row_countries, row_country_labels)
+
+        header = [c.strip().lower() for c in self.data[0]]
         try:
-            # Row 0: Date
-            result["date"] = self.get_cell(0, 0)
+            idx_week = header.index("week_start_mon")
+            idx_market = header.index("market")
+            idx_adsrc = header.index("ad_source")
+            idx_qualified = header.index("qualified")
+            idx_hqplus = header.index("hqplus")
+        except ValueError as e:
+            print(f"Error: registration_weekly missing column: {e}",
+                  file=sys.stderr)
+            return self._finalize(result, row_countries, row_country_labels)
 
-            # CSV Row 0: Combined header (date + column names)
-            # CSV Row 1: Total, Row 2: TH, Row 3: SEA, Row 4: ROW
-            regions_map = {
-                2: "TH",
-                3: "SEA",
-                4: "ROW"
+        max_idx = max(idx_week, idx_market, idx_adsrc,
+                      idx_qualified, idx_hqplus)
+        matched = 0
+        for row in self.data[1:]:
+            if len(row) <= max_idx:
+                continue
+            if row[idx_week].strip() != self.week_start_mon:
+                continue
+            matched += 1
+            market = row[idx_market]
+            ad_source = row[idx_adsrc]
+            q = self._to_int(row[idx_qualified])
+            h = self._to_int(row[idx_hqplus])
+            t = q + h                       # Total per spec
+            attributed = self._is_attributed(ad_source)
+            a = t if attributed else 0
+            u = 0 if attributed else t
+
+            region, submarket, code = self._classify_market(market)
+
+            def _add(bucket):
+                bucket["qualified_wtd"] += q
+                bucket["hqplus_wtd"] += h
+                bucket["total_wtd"] += t
+                bucket["attributed_wtd"] += a
+                bucket["unattributed_wtd"] += u
+
+            _add(regions["GLOBAL"])
+            _add(regions[region])
+            if submarket:
+                _add(regions[submarket])
+            if region == "ROW":
+                if code not in row_countries:
+                    row_countries[code] = self._empty_bucket()
+                _add(row_countries[code])
+                # Remember the friendliest label we saw for this code.
+                row_country_labels[code] = self._label_for_country(code, market)
+            _add(result["total"])
+
+        print(f"  Matched {matched} registration_weekly rows for "
+              f"week_start_mon={self.week_start_mon}")
+        return self._finalize(result, row_countries, row_country_labels)
+
+    def _finalize(self, result, row_countries, row_country_labels):
+        # Sort ROW countries: highest Total first, then alphabetical.
+        ordered = sorted(
+            row_countries.items(),
+            key=lambda kv: (-kv[1]["total_wtd"], kv[0]),
+        )
+        result["row_countries"] = [
+            {
+                "code": code,
+                "label": row_country_labels.get(code, code),
+                **self._stringify(bucket),
             }
-
-            for row_idx, region in regions_map.items():
-                result["regions"][region] = {
-                    "target_wtd": self.get_cell(row_idx, 2),
-                    "target_daily": self.get_cell(row_idx, 3),
-                    "total_wtd": self.get_cell(row_idx, 4),
-                    "total_daily": self.get_cell(row_idx, 5),
-                    "wtd_vs_target": self.get_cell(row_idx, 6),
-                    "qualified_wtd": self.get_cell(row_idx, 7),
-                    "qualified_daily": self.get_cell(row_idx, 8),
-                    "highly_qualified_wtd": self.get_cell(row_idx, 9),
-                    "highly_qualified_daily": self.get_cell(row_idx, 10),
-                    "premium_wtd": self.get_cell(row_idx, 11),
-                    "premium_daily": self.get_cell(row_idx, 12),
-                    "best_wtd": self.get_cell(row_idx, 13),
-                    "best_daily": self.get_cell(row_idx, 14)
-                }
-
-            # Total row is CSV row 1
-            result["total"] = {
-                "target_wtd": self.get_cell(1, 2),
-                "target_daily": self.get_cell(1, 3),
-                "total_wtd": self.get_cell(1, 4),
-                "total_daily": self.get_cell(1, 5),
-                "wtd_vs_target": self.get_cell(1, 6)
-            }
-
-        except Exception as e:
-            print(f"Error parsing marketing sign-ups: {e}", file=sys.stderr)
-
+            for code, bucket in ordered
+        ]
+        # Stringify the main region buckets and total.
+        for r, bucket in result["regions"].items():
+            result["regions"][r] = self._stringify(bucket)
+        result["total"] = self._stringify(result["total"])
         return result
+
+
+# Backwards-compatible alias.
+MarketingSignupsParser = RegistrationWeeklyParser
 
 
 class HTMLDashboardGenerator:
@@ -1484,58 +1719,85 @@ class HTMLDashboardGenerator:
         return html
 
     def _generate_marketing_section(self, marketing_data: Dict[str, Any]) -> str:
-        """Generate the marketing sign-ups section."""
+        """Generate the Marketing - Lead Overview section.
+
+        Columns: Region | Qualified | HQ+ | Total | Attributed | Unattributed
+        - Total = Qualified + HQ+
+        - Attributed + Unattributed = Total
+        Rows (in order):
+          GLOBAL (grand total),
+          TH,
+          SEA, ↳ MY, ↳ SG, ↳ PH,
+          ROW, ↳ <country code> for every ROW country with data this week.
+        Source: registration_weekly tab, filtered to current ISO week (WTD).
+        """
         html = '<div class="section">'
-        # Marketing data is 1 day behind
-        marketing_date = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%y")
-        html += f'<div class="section-title">Marketing - Lead Overview ({marketing_date})</div>'
+        marketing_date = datetime.now().strftime("%d/%m/%y")
+        html += (
+            f'<div class="section-title">Marketing - Lead Overview '
+            f'({marketing_date}, WTD)</div>'
+        )
 
         regions_data = marketing_data.get("regions", {})
+        row_countries = marketing_data.get("row_countries", [])
 
-        if regions_data:
-            html += '<table>'
-            html += '<thead><tr>'
-            html += '<th>Region</th>'
-            html += '<th style="text-align: right;">Target WTD</th>'
-            html += '<th style="text-align: right;">Total WTD</th>'
-            html += '<th style="text-align: right;">WTD vs Target</th>'
-            html += '<th style="text-align: right;">Qualified WTD</th>'
-            html += '<th style="text-align: right;">HQ WTD</th>'
-            html += '<th style="text-align: right;">Premium WTD</th>'
-            html += '<th style="text-align: right;">Best WTD</th>'
-            html += '</tr></thead><tbody>'
-
-            for region in ["TH", "SEA", "ROW"]:
-                if region in regions_data:
-                    data = regions_data[region]
-                    html += f'<tr><td class="metric-name">{region}</td>'
-
-                    target = self.safe_number(data.get("target_wtd", "-"))
-                    total = self.safe_number(data.get("total_wtd", "-"))
-                    vs_target = self.safe_number(data.get("wtd_vs_target", "-"))
-                    qualified = self.safe_number(data.get("qualified_wtd", "-"))
-                    hq = self.safe_number(data.get("highly_qualified_wtd", "-"))
-                    premium = self.safe_number(data.get("premium_wtd", "-"))
-                    best = self.safe_number(data.get("best_wtd", "-"))
-
-                    html += f'<td class="metric-value">{target}</td>'
-                    html += f'<td class="metric-value">{total}</td>'
-
-                    color = self.get_target_color(vs_target, "100%")
-                    target_class = "metric-target" if color == self.ZAAPI_COLORS["success"] else \
-                                  "metric-warning" if color == self.ZAAPI_COLORS["warning"] else "metric-danger"
-                    html += f'<td class="metric-value {target_class}">{vs_target}</td>'
-
-                    html += f'<td class="metric-value">{qualified}</td>'
-                    html += f'<td class="metric-value">{hq}</td>'
-                    html += f'<td class="metric-value">{premium}</td>'
-                    html += f'<td class="metric-value">{best}</td>'
-                    html += '</tr>'
-
-            html += '</tbody></table>'
-        else:
+        if not regions_data:
             html += '<div class="unavailable">Data unavailable</div>'
+            html += '</div>'
+            return html
 
+        html += '<table>'
+        html += '<thead><tr>'
+        html += '<th>Region</th>'
+        html += '<th style="text-align: right;">Qualified</th>'
+        html += '<th style="text-align: right;">HQ+</th>'
+        html += '<th style="text-align: right;">Total</th>'
+        html += '<th style="text-align: right;">Attributed</th>'
+        html += '<th style="text-align: right;">Unattributed</th>'
+        html += '</tr></thead><tbody>'
+
+        def render_row(label, data, indent=False, emphasize=False):
+            qualified = self.safe_number(data.get("qualified_wtd", "-"))
+            hq = self.safe_number(data.get("hqplus_wtd", "-"))
+            total = self.safe_number(data.get("total_wtd", "-"))
+            attributed = self.safe_number(data.get("attributed_wtd", "-"))
+            unattributed = self.safe_number(data.get("unattributed_wtd", "-"))
+
+            name_style = ' style="padding-left: 28px; opacity: 0.85;"' if indent else ''
+            tr_style = ''
+            if emphasize:
+                # Bold the GLOBAL row so the grand total reads as the header line.
+                tr_style = ' style="font-weight: 700; border-top: 2px solid #334155; border-bottom: 2px solid #334155;"'
+            display = ("&nbsp;&nbsp;&nbsp;&nbsp;↳ " + label) if indent else label
+
+            row_html = f'<tr{tr_style}><td class="metric-name"{name_style}>{display}</td>'
+            row_html += f'<td class="metric-value">{qualified}</td>'
+            row_html += f'<td class="metric-value">{hq}</td>'
+            row_html += f'<td class="metric-value">{total}</td>'
+            row_html += f'<td class="metric-value">{attributed}</td>'
+            row_html += f'<td class="metric-value">{unattributed}</td>'
+            row_html += '</tr>'
+            return row_html
+
+        # GLOBAL grand total
+        html += render_row("GLOBAL",
+                           regions_data.get("GLOBAL", {}),
+                           indent=False, emphasize=True)
+        # TH
+        html += render_row("TH", regions_data.get("TH", {}))
+        # SEA + submarkets
+        html += render_row("SEA", regions_data.get("SEA", {}))
+        for sub in ("MY", "SG", "PH"):
+            html += render_row(sub, regions_data.get(sub, {}), indent=True)
+        # ROW + country submarkets
+        html += render_row("ROW", regions_data.get("ROW", {}))
+        for c in row_countries:
+            label = f"{c.get('code', '??')} ({c.get('label', '')})" \
+                    if c.get("label") and c.get("label") != c.get("code") \
+                    else c.get("code", "??")
+            html += render_row(label, c, indent=True)
+
+        html += '</tbody></table>'
         html += '</div>'
         return html
 
@@ -1584,16 +1846,34 @@ class SlackNotifier:
             outbound_contact = outbound_funnel[1].get("total_wtd", "0") if len(outbound_funnel) > 1 else "0"
             inbound_contact = inbound_funnel[1].get("total_wtd", "0") if len(inbound_funnel) > 1 else "0"
 
-            # Extract marketing metrics
+            # Extract marketing metrics (registration_weekly aggregates)
             mktg_total = marketing_data.get("total", {})
+            mktg_regions = marketing_data.get("regions", {})
             total_leads_wtd = mktg_total.get("total_wtd", "0")
-            leads_vs_target = mktg_total.get("wtd_vs_target", "-")
+            qualified_wtd = mktg_total.get("qualified_wtd", "0")
+            hqplus_wtd = mktg_total.get("hqplus_wtd", "0")
+
+            def _mkt_row(label, key):
+                d = mktg_regions.get(key, {})
+                q = d.get("qualified_wtd", "0")
+                h = d.get("hqplus_wtd", "0")
+                t = d.get("total_wtd", "0")
+                # Fixed-width row inside back-ticks so columns line up in Slack.
+                return f"` {label:<6} {q:>3}   {h:>3}    {t:>3} `"
+
+            marketing_table = "\n".join([
+                "` Region    Q   HQ+  Total `",
+                _mkt_row("TH",  "TH"),
+                _mkt_row("SEA", "SEA"),
+                _mkt_row("ROW", "ROW"),
+            ])
 
             message = f"""
 :chart_with_upwards_trend: *Zaapi Daily Activity Report — {date_str}*
 
-*Marketing — Lead Overview*
-• Total Leads WTD: *{total_leads_wtd}* ({leads_vs_target} vs target)
+*Marketing — Lead Overview (WTD)*
+*GLOBAL:* {total_leads_wtd} total  |  Qualified: {qualified_wtd}  |  HQ+: {hqplus_wtd}
+{marketing_table}
 
 *Sales — Won Deals WTD*
 • Outbound: *{outbound_won}*  |  Inbound: *{inbound_won}*
@@ -1664,11 +1944,20 @@ def main():
         week_name
     )
 
-    print("Fetching Marketing Sign-ups data...")
+    # Marketing leads now sourced from the Zaapi-growth Ads Data sheet
+    # (tab: registration_weekly). We aggregate the current ISO week's rows by
+    # market into TH / SEA / MY / SG / PH / ROW buckets — see
+    # RegistrationWeeklyParser.
+    print("Fetching Marketing Lead Overview (registration_weekly)...")
     marketing_sheet = fetcher.fetch_sheet(
-        "1_0rqXxjO0Ngp8scm2RQgXzw_dgvWPcG9apEkImVpVSY",
-        "Daily Report"
+        "1s5AC58mAylpSDknU7L7HRJUPrVf36b0TvzD35tW-Wdw",
+        "registration_weekly"
     )
+    # ISO Monday for the current week, in YYYY-MM-DD (matches the
+    # week_start_mon column format in registration_weekly).
+    _today = datetime.now().date()
+    current_week_start_mon = (_today - timedelta(days=_today.weekday())).isoformat()
+    print(f"  Current week_start_mon: {current_week_start_mon}")
 
     # Parse data
     sales_data = {
@@ -1755,10 +2044,10 @@ def main():
     }
 
     if marketing_sheet:
-        parser = MarketingSignupsParser(marketing_sheet)
+        parser = RegistrationWeeklyParser(marketing_sheet, current_week_start_mon)
         marketing_data = parser.parse_data()
     else:
-        print("Warning: Marketing Sign-ups data not available", file=sys.stderr)
+        print("Warning: registration_weekly data not available", file=sys.stderr)
 
     # Generate HTML
     generator = HTMLDashboardGenerator()
