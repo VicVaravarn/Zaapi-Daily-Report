@@ -2,8 +2,8 @@ name: Daily Activity Report
 
 on:
   schedule:
-    # Run at 8pm Bangkok time (ICT = UTC+7) → 1pm UTC, every day
-    - cron: '0 13 * * *'
+    # Run at 6am Bangkok time (ICT = UTC+7) → 11pm UTC the previous day, every day
+    - cron: '0 23 * * *'
   workflow_dispatch: # Allow manual trigger
 
 permissions:
