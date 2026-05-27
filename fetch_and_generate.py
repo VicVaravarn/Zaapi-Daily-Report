@@ -33,16 +33,23 @@ class GoogleSheetsFetcher:
             url += f"&range={cell_range}"
         return url
 
-    def fetch_sheet(self, sheet_id: str, sheet_name: str, cell_range: str = None) -> Optional[List[List[str]]]:
+    def fetch_sheet(self, sheet_id: str, sheet_name: str, cell_range: str = None,
+                    gid: str = None) -> Optional[List[List[str]]]:
         """Fetch and parse a Google Sheet as CSV data.
 
         Args:
             cell_range: Optional cell range (e.g., 'J19:O28') for targeted fetching.
                         Needed for areas with merged cells that don't export correctly
                         in full-sheet CSV mode.
+            gid: Optional sheet GID.  When provided the raw export?format=csv
+                 endpoint is used instead of the gviz/tq endpoint.
         """
         try:
-            url = self.get_csv_url(sheet_id, sheet_name, cell_range)
+            if gid is not None:
+                url = (f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+                       f"/export?format=csv&gid={gid}")
+            else:
+                url = self.get_csv_url(sheet_id, sheet_name, cell_range)
             response = self.session.get(url, timeout=30)
             response.encoding = 'utf-8'
             response.raise_for_status()
@@ -702,7 +709,7 @@ class RegistrationWeeklyParser:
       - GLOBAL (grand total)
       - TH, SEA, ROW (region rollups)
       - MY, SG, PH (SEA submarkets)
-      - ROW submarkets by country (BR, DE, CH, …)
+      - ROW submarkets by country (BR, DE, CH, ‚Ä¶)
 
     NOTE: We bucket by *market* (column E), not the region column, because the
     current-week feed sometimes tags rows as region=ROW with country names like
@@ -712,7 +719,7 @@ class RegistrationWeeklyParser:
     For each bucket we compute:
       - qualified           = sum(col J)
       - hqplus              = sum(col N)
-      - total               = qualified + hqplus   (per spec — not col O)
+      - total               = qualified + hqplus   (per spec ‚Äî not col O)
       - attributed          = total contribution from rows with ad_source set
       - unattributed        = total contribution from rows with blank/unknown
                               ad_source
@@ -737,7 +744,7 @@ class RegistrationWeeklyParser:
         "TL", "TP", "EAST TIMOR",
     }
 
-    # Country name → ISO alpha-2 code for ROW (and a few SEA aliases). Used to
+    # Country name ‚Üí ISO alpha-2 code for ROW (and a few SEA aliases). Used to
     # label ROW sub-rows. If a market value is already a 2-letter code we use
     # it directly.
     COUNTRY_NAME_TO_CODE = {
@@ -780,7 +787,7 @@ class RegistrationWeeklyParser:
         "UNKNOWN": "??",
     }
 
-    # Reverse map (code → friendly label) for display.
+    # Reverse map (code ‚Üí friendly label) for display.
     CODE_TO_LABEL = {
         "US": "United States", "UK": "United Kingdom",
         "DE": "Germany", "CH": "Switzerland",
@@ -832,9 +839,9 @@ class RegistrationWeeklyParser:
     def _classify_market(self, market: str):
         """Return (region, submarket, country_code).
 
-        region        ∈ {"TH", "SEA", "ROW"}
-        submarket     ∈ {"MY", "SG", "PH"} or None  (only set for SEA majors)
-        country_code  ISO alpha-2 (or fallback) — only meaningful for ROW;
+        region        ‚àà {"TH", "SEA", "ROW"}
+        submarket     ‚àà {"MY", "SG", "PH"} or None  (only set for SEA majors)
+        country_code  ISO alpha-2 (or fallback) ‚Äî only meaningful for ROW;
                       for SEA/TH this is left to the caller (we don't break
                       out non-major SEA countries).
         """
@@ -1349,7 +1356,7 @@ class HTMLDashboardGenerator:
             </div>
             <div class="card">
                 <div class="label">Dashboard Status</div>
-                <div class="value">✓</div>
+                <div class="value">‚úì</div>
                 <div class="subtext">All systems operational</div>
             </div>
         </div>
@@ -1762,8 +1769,8 @@ class HTMLDashboardGenerator:
         Rows (in order):
           GLOBAL (grand total),
           TH,
-          SEA, ↳ MY, ↳ SG, ↳ PH,
-          ROW, ↳ <country code> for every ROW country with data this week.
+          SEA, ‚Ü≥ MY, ‚Ü≥ SG, ‚Ü≥ PH,
+          ROW, ‚Ü≥ <country code> for every ROW country with data this week.
         Source: registration_weekly tab, filtered to current ISO week (WTD).
         """
         html = '<div class="section">'
@@ -1803,7 +1810,7 @@ class HTMLDashboardGenerator:
             if emphasize:
                 # Bold the GLOBAL row so the grand total reads as the header line.
                 tr_style = ' style="font-weight: 700; border-top: 2px solid #334155; border-bottom: 2px solid #334155;"'
-            display = ("&nbsp;&nbsp;&nbsp;&nbsp;↳ " + label) if indent else label
+            display = ("&nbsp;&nbsp;&nbsp;&nbsp;‚Ü≥ " + label) if indent else label
 
             row_html = f'<tr{tr_style}><td class="metric-name"{name_style}>{display}</td>'
             row_html += f'<td class="metric-value">{qualified}</td>'
@@ -1904,18 +1911,18 @@ class SlackNotifier:
             ])
 
             message = f"""
-:chart_with_upwards_trend: *Zaapi Daily Activity Report — {date_str}*
+:chart_with_upwards_trend: *Zaapi Daily Activity Report ‚Äî {date_str}*
 
-*Marketing — Lead Overview (WTD)*
+*Marketing ‚Äî Lead Overview (WTD)*
 *GLOBAL:* {total_leads_wtd} total  |  Qualified: {qualified_wtd}  |  HQ+: {hqplus_wtd}
 {marketing_table}
 
-*Sales — Won Deals WTD*
-• Outbound: *{outbound_won}*  |  Inbound: *{inbound_won}*
-• Intl Outbound: *{intl_out_won}*  |  Intl Inbound: *{intl_in_won}*
+*Sales ‚Äî Won Deals WTD*
+‚Ä¢ Outbound: *{outbound_won}*  |  Inbound: *{inbound_won}*
+‚Ä¢ Intl Outbound: *{intl_out_won}*  |  Intl Inbound: *{intl_in_won}*
 
-*Sales — Contacts WTD*
-• Outbound: *{outbound_contact}*  |  Inbound: *{inbound_contact}*
+*Sales ‚Äî Contacts WTD*
+‚Ä¢ Outbound: *{outbound_contact}*  |  Inbound: *{inbound_contact}*
 
 :link: <{dashboard_url}|View Full Dashboard>
             """.strip()
@@ -1981,12 +1988,13 @@ def main():
 
     # Marketing leads now sourced from the Zaapi-growth Ads Data sheet
     # (tab: registration_weekly). We aggregate the current ISO week's rows by
-    # market into TH / SEA / MY / SG / PH / ROW buckets — see
+    # market into TH / SEA / MY / SG / PH / ROW buckets ‚Äî see
     # RegistrationWeeklyParser.
     print("Fetching Marketing Lead Overview (registration_weekly)...")
     marketing_sheet = fetcher.fetch_sheet(
         "1s5AC58mAylpSDknU7L7HRJUPrVf36b0TvzD35tW-Wdw",
-        "registration_weekly"
+        "registration_weekly",
+        gid="859536577",
     )
     # ISO Monday for the current week, in YYYY-MM-DD (matches the
     # week_start_mon column format in registration_weekly).
