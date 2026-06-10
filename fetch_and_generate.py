@@ -89,6 +89,18 @@ class GoogleSheetsFetcher:
         year = iso_calendar[0]
         return f"CW{week_number} {year}"
 
+    def resolve_sheet_name_from_wb(self, wb, expected_name: str) -> str:
+        """Find exact sheet name in XLSX workbook, handling whitespace mismatches."""
+        if not wb:
+            return expected_name
+        for name in wb.sheetnames:
+            if name.strip() == expected_name.strip():
+                if name != expected_name:
+                    print(f"  Resolved sheet name: '{expected_name}' -> '{name}' (whitespace adjusted)")
+                return name
+        print(f"  Warning: Sheet '{expected_name}' not found in workbook")
+        return expected_name
+
 
 class SalesHuddleParser:
     """Parses Sales Huddle sheet data."""
@@ -709,7 +721,7 @@ class RegistrationWeeklyParser:
       - GLOBAL (grand total)
       - TH, SEA, ROW (region rollups)
       - MY, SG, PH (SEA submarkets)
-      - ROW submarkets by country (BR, DE, CH, ‚Ä¶)
+      - ROW submarkets by country (BR, DE, CH, ‚Äö√Ñ¬∂)
 
     NOTE: We bucket by *market* (column E), not the region column, because the
     current-week feed sometimes tags rows as region=ROW with country names like
@@ -719,7 +731,7 @@ class RegistrationWeeklyParser:
     For each bucket we compute:
       - qualified           = sum(col J)
       - hqplus              = sum(col N)
-      - total               = qualified + hqplus   (per spec ‚Äî not col O)
+      - total               = qualified + hqplus   (per spec ‚Äö√Ñ√Æ not col O)
       - attributed          = total contribution from rows with ad_source set
       - unattributed        = total contribution from rows with blank/unknown
                               ad_source
@@ -744,7 +756,7 @@ class RegistrationWeeklyParser:
         "TL", "TP", "EAST TIMOR",
     }
 
-    # Country name ‚Üí ISO alpha-2 code for ROW (and a few SEA aliases). Used to
+    # Country name ‚Äö√ú√≠ ISO alpha-2 code for ROW (and a few SEA aliases). Used to
     # label ROW sub-rows. If a market value is already a 2-letter code we use
     # it directly.
     COUNTRY_NAME_TO_CODE = {
@@ -787,7 +799,7 @@ class RegistrationWeeklyParser:
         "UNKNOWN": "??",
     }
 
-    # Reverse map (code ‚Üí friendly label) for display.
+    # Reverse map (code ‚Äö√ú√≠ friendly label) for display.
     CODE_TO_LABEL = {
         "US": "United States", "UK": "United Kingdom",
         "DE": "Germany", "CH": "Switzerland",
@@ -839,9 +851,9 @@ class RegistrationWeeklyParser:
     def _classify_market(self, market: str):
         """Return (region, submarket, country_code).
 
-        region        ‚àà {"TH", "SEA", "ROW"}
-        submarket     ‚àà {"MY", "SG", "PH"} or None  (only set for SEA majors)
-        country_code  ISO alpha-2 (or fallback) ‚Äî only meaningful for ROW;
+        region        ‚Äö√†√† {"TH", "SEA", "ROW"}
+        submarket     ‚Äö√†√† {"MY", "SG", "PH"} or None  (only set for SEA majors)
+        country_code  ISO alpha-2 (or fallback) ‚Äö√Ñ√Æ only meaningful for ROW;
                       for SEA/TH this is left to the caller (we don't break
                       out non-major SEA countries).
         """
@@ -1356,7 +1368,7 @@ class HTMLDashboardGenerator:
             </div>
             <div class="card">
                 <div class="label">Dashboard Status</div>
-                <div class="value">‚úì</div>
+                <div class="value">‚Äö√∫√¨</div>
                 <div class="subtext">All systems operational</div>
             </div>
         </div>
@@ -1376,7 +1388,8 @@ class HTMLDashboardGenerator:
             html += self._generate_funnel_table(
                 outbound.get("funnel", []),
                 agents=["Yayee", "Toey"],
-                agent_keys=["yayee", "toey"]
+                agent_keys=["yayee", "toey"],
+                show_targets=False
             )
 
             # Hot Deals section
@@ -1417,8 +1430,8 @@ class HTMLDashboardGenerator:
         if inbound and inbound.get("funnel"):
             html += self._generate_funnel_table(
                 inbound.get("funnel", []),
-                agents=["Pleum", "Pear", "Loogpad"],
-                agent_keys=["pleum", "pear", "loogpad"]
+                agents=["Pear", "Loogpad"],
+                agent_keys=["pear", "loogpad"]
             )
 
             # Hot Deals section
@@ -1427,7 +1440,6 @@ class HTMLDashboardGenerator:
                 html += '<table style="margin-top: 20px;">'
                 html += '<thead><tr>'
                 html += '<th>Hot Deals Category</th>'
-                html += '<th style="text-align: right;">Pleum</th>'
                 html += '<th style="text-align: right;">Pear</th>'
                 html += '<th style="text-align: right;">Loogpad</th>'
                 html += '</tr></thead>'
@@ -1437,14 +1449,11 @@ class HTMLDashboardGenerator:
                     if category in hot_deals:
                         cat_data = hot_deals[category]
                         cat_name = "Hot Deal" if category == "hot_deal" else category.upper()
-                        pleum_items = cat_data.get("pleum", [])
                         pear_items = cat_data.get("pear", [])
                         loogpad_items = cat_data.get("loogpad", [])
-                        pleum_str = ", ".join(pleum_items) if pleum_items else "-"
                         pear_str = ", ".join(pear_items) if pear_items else "-"
                         loogpad_str = ", ".join(loogpad_items) if loogpad_items else "-"
                         html += f'<tr><td class="metric-name">{cat_name}</td>'
-                        html += f'<td class="metric-value">{pleum_str}</td>'
                         html += f'<td class="metric-value">{pear_str}</td>'
                         html += f'<td class="metric-value">{loogpad_str}</td>'
                         html += '</tr>'
@@ -1477,139 +1486,69 @@ class HTMLDashboardGenerator:
         # Won metrics summary
         won = renewal.get("won", {})
         won_total = self.safe_number(won.get("total_wtd", "0"))
-        won_pleum = self.safe_number(won.get("pleum_wtd", "0"))
         won_loogpad = self.safe_number(won.get("loogpad_wtd", "0"))
 
-        if won_total != "0" or won_pleum != "0" or won_loogpad != "0":
+        if won_total != "0" or won_loogpad != "0":
             html += f'<div style="margin-bottom: 15px; padding: 10px; background: rgba(34, 197, 94, 0.1); border-radius: 6px; border-left: 4px solid #22c55e;">'
             html += f'<span style="font-weight: 600; color: #22c55e;">Won Renewals WTD:</span> '
-            html += f'Total: <strong>{won_total}</strong> | Pleum: <strong>{won_pleum}</strong> | Loogpad: <strong>{won_loogpad}</strong>'
+            html += f'Total: <strong>{won_total}</strong> | Loogpad: <strong>{won_loogpad}</strong>'
             html += '</div>'
 
         # Due to Renew table
-        due_pleum = renewal.get("due_to_renew", {}).get("pleum", [])
         due_loogpad = renewal.get("due_to_renew", {}).get("loogpad", [])
 
-        if due_pleum or due_loogpad:
+        if due_loogpad:
             html += '<h3 style="font-size: 1.1em; margin: 15px 0 10px; color: #94a3b8;">Due to Renew This Week</h3>'
-            html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">'
-
-            # Pleum column
-            html += '<div>'
-            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px; font-size: 1.05em;">Pleum</div>'
-            if due_pleum:
-                html += '<table style="width: 100%;">'
-                html += '<thead><tr><th style="text-align: left; font-size: 0.8em;">Date</th>'
-                html += '<th style="text-align: left; font-size: 0.8em;">Account</th>'
-                html += '<th style="text-align: center; font-size: 0.8em;">Status</th></tr></thead><tbody>'
-                for item in due_pleum:
-                    name = item.get("name", "")
-                    date = item.get("date", "")
-                    confirmed = item.get("confirmed", False)
-                    if confirmed:
-                        row_style = 'style="background: rgba(34, 197, 94, 0.15);"'
-                        status_badge = '<span style="background: #22c55e; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600;">Confirmed</span>'
-                    else:
-                        row_style = ''
-                        status_badge = '<span style="color: #94a3b8; font-size: 0.8em;">Pending</span>'
-                    html += f'<tr {row_style}><td style="font-size: 0.85em; color: #94a3b8; white-space: nowrap;">{date}</td>'
-                    html += f'<td style="font-weight: 500;">{name}</td>'
-                    html += f'<td style="text-align: center;">{status_badge}</td></tr>'
-                html += '</tbody></table>'
-            else:
-                html += '<div style="color: #64748b; font-style: italic; padding: 10px;">No accounts due</div>'
-            html += '</div>'
 
             # Loogpad column
             html += '<div>'
             html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px; font-size: 1.05em;">Loogpad</div>'
-            if due_loogpad:
-                html += '<table style="width: 100%;">'
-                html += '<thead><tr><th style="text-align: left; font-size: 0.8em;">Date</th>'
-                html += '<th style="text-align: left; font-size: 0.8em;">Account</th>'
-                html += '<th style="text-align: center; font-size: 0.8em;">Status</th></tr></thead><tbody>'
-                for item in due_loogpad:
-                    name = item.get("name", "")
-                    date = item.get("date", "")
-                    confirmed = item.get("confirmed", False)
-                    if confirmed:
-                        row_style = 'style="background: rgba(34, 197, 94, 0.15);"'
-                        status_badge = '<span style="background: #22c55e; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600;">Confirmed</span>'
-                    else:
-                        row_style = ''
-                        status_badge = '<span style="color: #94a3b8; font-size: 0.8em;">Pending</span>'
-                    html += f'<tr {row_style}><td style="font-size: 0.85em; color: #94a3b8; white-space: nowrap;">{date}</td>'
-                    html += f'<td style="font-weight: 500;">{name}</td>'
-                    html += f'<td style="text-align: center;">{status_badge}</td></tr>'
-                html += '</tbody></table>'
-            else:
-                html += '<div style="color: #64748b; font-style: italic; padding: 10px;">No accounts due</div>'
+            html += '<table style="width: 100%;">'
+            html += '<thead><tr><th style="text-align: left; font-size: 0.8em;">Date</th>'
+            html += '<th style="text-align: left; font-size: 0.8em;">Account</th>'
+            html += '<th style="text-align: center; font-size: 0.8em;">Status</th></tr></thead><tbody>'
+            for item in due_loogpad:
+                name = item.get("name", "")
+                date = item.get("date", "")
+                confirmed = item.get("confirmed", False)
+                if confirmed:
+                    row_style = 'style="background: rgba(34, 197, 94, 0.15);"'
+                    status_badge = '<span style="background: #22c55e; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600;">Confirmed</span>'
+                else:
+                    row_style = ''
+                    status_badge = '<span style="color: #94a3b8; font-size: 0.8em;">Pending</span>'
+                html += f'<tr {row_style}><td style="font-size: 0.85em; color: #94a3b8; white-space: nowrap;">{date}</td>'
+                html += f'<td style="font-weight: 500;">{name}</td>'
+                html += f'<td style="text-align: center;">{status_badge}</td></tr>'
+            html += '</tbody></table>'
             html += '</div>'
-
-            html += '</div>'  # Close grid
 
         # Renewed section
-        renewed_pleum = renewal.get("renewed", {}).get("pleum", [])
         renewed_loogpad = renewal.get("renewed", {}).get("loogpad", [])
 
-        if renewed_pleum or renewed_loogpad:
+        if renewed_loogpad:
             html += '<h3 style="font-size: 1.1em; margin: 20px 0 10px; color: #22c55e;">&#10003; Renewed</h3>'
-            html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">'
-
-            html += '<div>'
-            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Pleum</div>'
-            if renewed_pleum:
-                html += '<div class="account-list">'
-                for name in renewed_pleum:
-                    html += f'<span class="account-tag" style="border-color: #22c55e; background: rgba(34, 197, 94, 0.15);">{name}</span>'
-                html += '</div>'
-            else:
-                html += '<div style="color: #64748b; font-style: italic;">-</div>'
-            html += '</div>'
 
             html += '<div>'
             html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Loogpad</div>'
-            if renewed_loogpad:
-                html += '<div class="account-list">'
-                for name in renewed_loogpad:
-                    html += f'<span class="account-tag" style="border-color: #22c55e; background: rgba(34, 197, 94, 0.15);">{name}</span>'
-                html += '</div>'
-            else:
-                html += '<div style="color: #64748b; font-style: italic;">-</div>'
+            html += '<div class="account-list">'
+            for name in renewed_loogpad:
+                html += f'<span class="account-tag" style="border-color: #22c55e; background: rgba(34, 197, 94, 0.15);">{name}</span>'
             html += '</div>'
-
             html += '</div>'
 
         # Churned section
-        churned_pleum = renewal.get("churned", {}).get("pleum", [])
         churned_loogpad = renewal.get("churned", {}).get("loogpad", [])
 
-        if churned_pleum or churned_loogpad:
+        if churned_loogpad:
             html += '<h3 style="font-size: 1.1em; margin: 20px 0 10px; color: #ef4444;">Churned</h3>'
-            html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">'
-
-            html += '<div>'
-            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Pleum</div>'
-            if churned_pleum:
-                html += '<div class="account-list">'
-                for name in churned_pleum:
-                    html += f'<span class="account-tag" style="border-color: #ef4444; background: rgba(239, 68, 68, 0.15);">{name}</span>'
-                html += '</div>'
-            else:
-                html += '<div style="color: #64748b; font-style: italic;">-</div>'
-            html += '</div>'
 
             html += '<div>'
             html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Loogpad</div>'
-            if churned_loogpad:
-                html += '<div class="account-list">'
-                for name in churned_loogpad:
-                    html += f'<span class="account-tag" style="border-color: #ef4444; background: rgba(239, 68, 68, 0.15);">{name}</span>'
-                html += '</div>'
-            else:
-                html += '<div style="color: #64748b; font-style: italic;">-</div>'
+            html += '<div class="account-list">'
+            for name in churned_loogpad:
+                html += f'<span class="account-tag" style="border-color: #ef4444; background: rgba(239, 68, 68, 0.15);">{name}</span>'
             html += '</div>'
-
             html += '</div>'
 
         html += '</div>'  # Close section
@@ -1707,19 +1646,22 @@ class HTMLDashboardGenerator:
         return html
 
     def _generate_funnel_table(self, funnel: List[Dict[str, str]],
-                               agents: List[str], agent_keys: List[str]) -> str:
+                               agents: List[str], agent_keys: List[str],
+                               show_targets: bool = True) -> str:
         """Generate a funnel metrics table."""
         html = '<table>'
         html += '<thead><tr>'
         html += '<th>Metric</th>'
         html += '<th style="text-align: right;">Total WTD</th>'
         html += '<th style="text-align: right;">Total Daily</th>'
-        html += '<th style="text-align: right;">WTD vs Target</th>'
+        if show_targets:
+            html += '<th style="text-align: right;">WTD vs Target</th>'
 
         for agent in agents:
             html += f'<th style="text-align: right;">{agent} WTD</th>'
             html += f'<th style="text-align: right;">{agent} Daily</th>'
-            html += f'<th style="text-align: right;">{agent} vs Target</th>'
+            if show_targets:
+                html += f'<th style="text-align: right;">{agent} vs Target</th>'
 
         html += '</tr></thead><tbody>'
 
@@ -1735,11 +1677,12 @@ class HTMLDashboardGenerator:
             html += f'<td class="metric-value">{total_wtd}</td>'
             html += f'<td class="metric-value">{total_daily}</td>'
 
-            # Target color
-            color = self.get_target_color(total_vs_target, "100%")
-            target_class = "metric-target" if color == self.ZAAPI_COLORS["success"] else \
-                          "metric-warning" if color == self.ZAAPI_COLORS["warning"] else "metric-danger"
-            html += f'<td class="metric-value {target_class}">{total_vs_target}</td>'
+            if show_targets:
+                # Target color
+                color = self.get_target_color(total_vs_target, "100%")
+                target_class = "metric-target" if color == self.ZAAPI_COLORS["success"] else \
+                              "metric-warning" if color == self.ZAAPI_COLORS["warning"] else "metric-danger"
+                html += f'<td class="metric-value {target_class}">{total_vs_target}</td>'
 
             # Agent columns
             for agent_key in agent_keys:
@@ -1750,10 +1693,11 @@ class HTMLDashboardGenerator:
                 html += f'<td class="metric-value">{wtd}</td>'
                 html += f'<td class="metric-value">{daily}</td>'
 
-                color = self.get_target_color(vs_target, "100%")
-                target_class = "metric-target" if color == self.ZAAPI_COLORS["success"] else \
-                              "metric-warning" if color == self.ZAAPI_COLORS["warning"] else "metric-danger"
-                html += f'<td class="metric-value {target_class}">{vs_target}</td>'
+                if show_targets:
+                    color = self.get_target_color(vs_target, "100%")
+                    target_class = "metric-target" if color == self.ZAAPI_COLORS["success"] else \
+                                  "metric-warning" if color == self.ZAAPI_COLORS["warning"] else "metric-danger"
+                    html += f'<td class="metric-value {target_class}">{vs_target}</td>'
 
             html += '</tr>'
 
@@ -1769,8 +1713,8 @@ class HTMLDashboardGenerator:
         Rows (in order):
           GLOBAL (grand total),
           TH,
-          SEA, ‚Ü≥ MY, ‚Ü≥ SG, ‚Ü≥ PH,
-          ROW, ‚Ü≥ <country code> for every ROW country with data this week.
+          SEA, ‚Äö√ú‚â• MY, ‚Äö√ú‚â• SG, ‚Äö√ú‚â• PH,
+          ROW, ‚Äö√ú‚â• <country code> for every ROW country with data this week.
         Source: registration_weekly tab, filtered to current ISO week (WTD).
         """
         html = '<div class="section">'
@@ -1810,7 +1754,7 @@ class HTMLDashboardGenerator:
             if emphasize:
                 # Bold the GLOBAL row so the grand total reads as the header line.
                 tr_style = ' style="font-weight: 700; border-top: 2px solid #334155; border-bottom: 2px solid #334155;"'
-            display = ("&nbsp;&nbsp;&nbsp;&nbsp;‚Ü≥ " + label) if indent else label
+            display = ("&nbsp;&nbsp;&nbsp;&nbsp;‚Äö√ú‚â• " + label) if indent else label
 
             row_html = f'<tr{tr_style}><td class="metric-name"{name_style}>{display}</td>'
             row_html += f'<td class="metric-value">{qualified}</td>'
@@ -1911,18 +1855,18 @@ class SlackNotifier:
             ])
 
             message = f"""
-:chart_with_upwards_trend: *Zaapi Daily Activity Report ‚Äî {date_str}*
+:chart_with_upwards_trend: *Zaapi Daily Activity Report ‚Äö√Ñ√Æ {date_str}*
 
-*Marketing ‚Äî Lead Overview (WTD)*
+*Marketing ‚Äö√Ñ√Æ Lead Overview (WTD)*
 *GLOBAL:* {total_leads_wtd} total  |  Qualified: {qualified_wtd}  |  HQ+: {hqplus_wtd}
 {marketing_table}
 
-*Sales ‚Äî Won Deals WTD*
-‚Ä¢ Outbound: *{outbound_won}*  |  Inbound: *{inbound_won}*
-‚Ä¢ Intl Outbound: *{intl_out_won}*  |  Intl Inbound: *{intl_in_won}*
+*Sales ‚Äö√Ñ√Æ Won Deals WTD*
+‚Äö√Ñ¬¢ Outbound: *{outbound_won}*  |  Inbound: *{inbound_won}*
+‚Äö√Ñ¬¢ Intl Outbound: *{intl_out_won}*  |  Intl Inbound: *{intl_in_won}*
 
-*Sales ‚Äî Contacts WTD*
-‚Ä¢ Outbound: *{outbound_contact}*  |  Inbound: *{inbound_contact}*
+*Sales ‚Äö√Ñ√Æ Contacts WTD*
+‚Äö√Ñ¬¢ Outbound: *{outbound_contact}*  |  Inbound: *{inbound_contact}*
 
 :link: <{dashboard_url}|View Full Dashboard>
             """.strip()
@@ -1981,14 +1925,20 @@ def main():
     week_name = fetcher.get_current_week_sheet_name()
     print(f"Current week: {week_name}")
 
+    # Fetch XLSX first for sheet name resolution and green cell detection
+    sales_sheet_id = "1A33NpnkZlgrwyDSOKn3nwB0u5mFtal2BlVC0nGZL7Xk"
+    print("Fetching XLSX for sheet name resolution and renewal formatting...")
+    wb = fetcher.fetch_sheet_xlsx(sales_sheet_id)
+    week_name = fetcher.resolve_sheet_name_from_wb(wb, week_name)
+
     sales_sheet = fetcher.fetch_sheet(
-        "1A33NpnkZlgrwyDSOKn3nwB0u5mFtal2BlVC0nGZL7Xk",
+        sales_sheet_id,
         week_name
     )
 
     # Marketing leads now sourced from the Zaapi-growth Ads Data sheet
     # (tab: registration_weekly). We aggregate the current ISO week's rows by
-    # market into TH / SEA / MY / SG / PH / ROW buckets ‚Äî see
+    # market into TH / SEA / MY / SG / PH / ROW buckets ‚Äö√Ñ√Æ see
     # RegistrationWeeklyParser.
     print("Fetching Marketing Lead Overview (registration_weekly)...")
     marketing_sheet = fetcher.fetch_sheet(
@@ -2015,7 +1965,6 @@ def main():
     if sales_sheet:
         # Fetch hot deals sections with range-specific queries to work around
         # Google Sheets merged cell CSV export issues that drop agent data
-        sales_sheet_id = "1A33NpnkZlgrwyDSOKn3nwB0u5mFtal2BlVC0nGZL7Xk"
         print("Fetching Hot Deals ranges (merged cell workaround)...")
         hot_deals_ranges = {
             "outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="J19:O55"),
@@ -2028,11 +1977,10 @@ def main():
         print("Fetching Renewal section data...")
         renewal_range = fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="R58:AF100")
 
-        # Fetch XLSX for green cell detection (confirmed renewals)
-        print("Fetching XLSX for renewal formatting...")
+        # Use already-fetched XLSX for green cell detection (confirmed renewals)
+        print("Checking XLSX for renewal formatting...")
         green_cells = set()
         try:
-            wb = fetcher.fetch_sheet_xlsx(sales_sheet_id)
             if wb and week_name in wb.sheetnames:
                 ws = wb[week_name]
                 # Check account name columns (AB=28, AE=31) for green background
