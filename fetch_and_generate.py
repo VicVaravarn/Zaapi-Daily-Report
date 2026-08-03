@@ -121,21 +121,27 @@ class SalesHuddleParser:
             return ""
 
     def _parse_hot_deals_from_range(self, range_data, agent1_col, agent2_col, agent1_name, agent2_name,
-                                     agent3_col=None, agent3_name=None):
+                                     agent3_col=None, agent3_name=None,
+                                     extra_agents=None):
         """Parse hot deals from a range-specific CSV fetch.
 
         Range data has columns relative to the fetched range (0-indexed).
         agent1_col/agent2_col are column indices within the range data.
-        Optionally supports a third agent (agent3_col/agent3_name).
+        Optionally supports a third agent (agent3_col/agent3_name) and
+        extra_agents as a list of (col, name) tuples for additional agents.
         """
+        # Build unified agent list: [(col, name), ...]
+        agents = [(agent1_col, agent1_name), (agent2_col, agent2_name)]
+        if agent3_col is not None and agent3_name:
+            agents.append((agent3_col, agent3_name))
+        if extra_agents:
+            agents.extend(extra_agents)
+
         hot_deals = {
-            "hot_deal": {agent1_name: [], agent2_name: []},
-            "ctp": {agent1_name: [], agent2_name: []},
-            "won": {agent1_name: [], agent2_name: []}
+            "hot_deal": {name: [] for _, name in agents},
+            "ctp": {name: [] for _, name in agents},
+            "won": {name: [] for _, name in agents}
         }
-        if agent3_name:
-            for cat in hot_deals:
-                hot_deals[cat][agent3_name] = []
 
         if not range_data:
             return hot_deals
@@ -143,49 +149,34 @@ class SalesHuddleParser:
         current_category = None
         category_keywords = {"hot deal", "ctp", "won"}
         for row in range_data:
-            agent1_val = row[agent1_col].strip() if agent1_col < len(row) else ""
-            agent2_val = row[agent2_col].strip() if agent2_col < len(row) else ""
-            agent3_val = ""
-            if agent3_col is not None and agent3_name:
-                agent3_val = row[agent3_col].strip() if agent3_col < len(row) else ""
+            vals = []
+            for col, name in agents:
+                val = row[col].strip() if col < len(row) else ""
+                vals.append((val, val.lower() if val else "", name))
 
-            check1 = agent1_val.lower() if agent1_val else ""
-            check2 = agent2_val.lower() if agent2_val else ""
-            check3 = agent3_val.lower() if agent3_val else ""
+            detected_cat = None
+            for val, chk, name in vals:
+                if chk == "hot deal":
+                    detected_cat = "hot_deal"
+                    break
+                elif chk == "ctp":
+                    detected_cat = "ctp"
+                    break
+                elif chk == "won":
+                    detected_cat = "won"
+                    break
 
-            if check1 == "hot deal" or check2 == "hot deal" or check3 == "hot deal":
-                current_category = "hot_deal"
-                # Pick up non-category values on the same row
-                for val, chk, name in [(agent1_val, check1, agent1_name),
-                                        (agent2_val, check2, agent2_name),
-                                        (agent3_val, check3, agent3_name if agent3_name else None)]:
-                    if name and val and chk not in category_keywords:
-                        hot_deals[current_category][name].append(val)
-                continue
-            elif check1 == "ctp" or check2 == "ctp" or check3 == "ctp":
-                current_category = "ctp"
-                for val, chk, name in [(agent1_val, check1, agent1_name),
-                                        (agent2_val, check2, agent2_name),
-                                        (agent3_val, check3, agent3_name if agent3_name else None)]:
-                    if name and val and chk not in category_keywords:
-                        hot_deals[current_category][name].append(val)
-                continue
-            elif check1 == "won" or check2 == "won" or check3 == "won":
-                current_category = "won"
-                for val, chk, name in [(agent1_val, check1, agent1_name),
-                                        (agent2_val, check2, agent2_name),
-                                        (agent3_val, check3, agent3_name if agent3_name else None)]:
+            if detected_cat:
+                current_category = detected_cat
+                for val, chk, name in vals:
                     if name and val and chk not in category_keywords:
                         hot_deals[current_category][name].append(val)
                 continue
 
             if current_category:
-                if agent1_val and agent1_val.lower() not in category_keywords:
-                    hot_deals[current_category][agent1_name].append(agent1_val)
-                if agent2_val and agent2_val.lower() not in category_keywords:
-                    hot_deals[current_category][agent2_name].append(agent2_val)
-                if agent3_name and agent3_val and agent3_val.lower() not in category_keywords:
-                    hot_deals[current_category][agent3_name].append(agent3_val)
+                for val, chk, name in vals:
+                    if val and chk not in category_keywords:
+                        hot_deals[current_category][name].append(val)
 
         return hot_deals
 
@@ -317,6 +308,12 @@ class SalesHuddleParser:
             pear_wtd_col = 32      # AG
             pear_daily_col = 33    # AH
             pear_vs_target_col = 34  # AI
+            james_wtd_col = 35     # AJ
+            james_daily_col = 36   # AK
+            james_vs_target_col = 37  # AL
+            run_wtd_col = 38       # AM
+            run_daily_col = 39     # AN
+            run_vs_target_col = 40  # AO
 
             # Extract summary
             target_wtd = self.get_cell(10, 19)  # T
@@ -342,49 +339,53 @@ class SalesHuddleParser:
                     "pear_vs_target": self.get_cell(row_idx, pear_vs_target_col),
                     "loogpad_wtd": self.get_cell(row_idx, loogpad_wtd_col),
                     "loogpad_daily": self.get_cell(row_idx, loogpad_daily_col),
-                    "loogpad_vs_target": self.get_cell(row_idx, loogpad_vs_target_col)
+                    "loogpad_vs_target": self.get_cell(row_idx, loogpad_vs_target_col),
+                    "james_wtd": self.get_cell(row_idx, james_wtd_col),
+                    "james_daily": self.get_cell(row_idx, james_daily_col),
+                    "james_vs_target": self.get_cell(row_idx, james_vs_target_col),
+                    "run_wtd": self.get_cell(row_idx, run_wtd_col),
+                    "run_daily": self.get_cell(row_idx, run_daily_col),
+                    "run_vs_target": self.get_cell(row_idx, run_vs_target_col)
                 }
                 result["funnel"].append(metric_data)
 
             # Parse Hot Deals using range-specific data (merged cell CSV workaround)
-            # Range fetch: AA19:AI55 -> col 0 = Pleum (AA), col 3 = Loogpad (AD), col 6 = Pear (AG)
+            # Range fetch: AA19:AO55 -> col 0 = Pleum (AA), col 3 = Loogpad (AD), col 6 = Pear (AG), col 9 = James (AJ), col 12 = Run (AM)
             range_data = self.hot_deals_ranges.get("inbound")
             if range_data:
                 result["hot_deals"] = self._parse_hot_deals_from_range(
                     range_data, agent1_col=0, agent2_col=3,
                     agent1_name="pleum", agent2_name="loogpad",
-                    agent3_col=6, agent3_name="pear"
+                    agent3_col=6, agent3_name="pear",
+                    extra_agents=[(9, "james"), (12, "run")]
                 )
             else:
+                all_agents = ["pleum", "loogpad", "pear", "james", "run"]
                 hot_deals = {
-                    "hot_deal": {"pleum": [], "loogpad": [], "pear": []},
-                    "ctp": {"pleum": [], "loogpad": [], "pear": []},
-                    "won": {"pleum": [], "loogpad": [], "pear": []}
+                    "hot_deal": {a: [] for a in all_agents},
+                    "ctp": {a: [] for a in all_agents},
+                    "won": {a: [] for a in all_agents}
                 }
                 current_category = None
+                agent_cols = [
+                    ("pleum", pleum_wtd_col), ("loogpad", loogpad_wtd_col),
+                    ("pear", pear_wtd_col), ("james", james_wtd_col), ("run", run_wtd_col)
+                ]
                 for row_idx in range(18, min(len(self.data), 30)):
-                    pleum_val = self.get_cell(row_idx, pleum_wtd_col)
-                    loogpad_val = self.get_cell(row_idx, loogpad_wtd_col)
-                    pear_val = self.get_cell(row_idx, pear_wtd_col)
-                    check_val = pleum_val.lower().strip() if pleum_val else ""
-                    check_val2 = loogpad_val.lower().strip() if loogpad_val else ""
-                    check_val3 = pear_val.lower().strip() if pear_val else ""
-                    if check_val == "hot deal" or check_val2 == "hot deal" or check_val3 == "hot deal":
-                        current_category = "hot_deal"
-                        continue
-                    elif check_val == "ctp" or check_val2 == "ctp" or check_val3 == "ctp":
-                        current_category = "ctp"
-                        continue
-                    elif check_val == "won" or check_val2 == "won" or check_val3 == "won":
-                        current_category = "won"
+                    vals = [(name, self.get_cell(row_idx, col)) for name, col in agent_cols]
+                    checks = [(name, v, v.lower().strip() if v else "") for name, v in vals]
+                    detected = None
+                    for _, _, chk in checks:
+                        if chk == "hot deal": detected = "hot_deal"; break
+                        elif chk == "ctp": detected = "ctp"; break
+                        elif chk == "won": detected = "won"; break
+                    if detected:
+                        current_category = detected
                         continue
                     if current_category:
-                        if pleum_val and pleum_val.lower() not in ["hot deal", "ctp", "won"]:
-                            hot_deals[current_category]["pleum"].append(pleum_val)
-                        if loogpad_val and loogpad_val.lower() not in ["hot deal", "ctp", "won"]:
-                            hot_deals[current_category]["loogpad"].append(loogpad_val)
-                        if pear_val and pear_val.lower() not in ["hot deal", "ctp", "won"]:
-                            hot_deals[current_category]["pear"].append(pear_val)
+                        for name, v, chk in checks:
+                            if v and chk not in ["hot deal", "ctp", "won"]:
+                                hot_deals[current_category][name].append(v)
                 result["hot_deals"] = hot_deals
 
         except Exception as e:
@@ -1430,18 +1431,19 @@ class HTMLDashboardGenerator:
         if inbound and inbound.get("funnel"):
             html += self._generate_funnel_table(
                 inbound.get("funnel", []),
-                agents=["Pear", "Loogpad"],
-                agent_keys=["pear", "loogpad"]
+                agents=["Loogpad", "James", "Run"],
+                agent_keys=["loogpad", "james", "run"]
             )
 
             # Hot Deals section
             hot_deals = inbound.get("hot_deals", {})
             if hot_deals:
+                inbound_agents = [("loogpad", "Loogpad"), ("james", "James"), ("run", "Run")]
                 html += '<table style="margin-top: 20px;">'
                 html += '<thead><tr>'
                 html += '<th>Hot Deals Category</th>'
-                html += '<th style="text-align: right;">Pear</th>'
-                html += '<th style="text-align: right;">Loogpad</th>'
+                for _, display in inbound_agents:
+                    html += f'<th style="text-align: right;">{display}</th>'
                 html += '</tr></thead>'
                 html += '<tbody>'
 
@@ -1449,13 +1451,11 @@ class HTMLDashboardGenerator:
                     if category in hot_deals:
                         cat_data = hot_deals[category]
                         cat_name = "Hot Deal" if category == "hot_deal" else category.upper()
-                        pear_items = cat_data.get("pear", [])
-                        loogpad_items = cat_data.get("loogpad", [])
-                        pear_str = ", ".join(pear_items) if pear_items else "-"
-                        loogpad_str = ", ".join(loogpad_items) if loogpad_items else "-"
                         html += f'<tr><td class="metric-name">{cat_name}</td>'
-                        html += f'<td class="metric-value">{pear_str}</td>'
-                        html += f'<td class="metric-value">{loogpad_str}</td>'
+                        for key, _ in inbound_agents:
+                            items = cat_data.get(key, [])
+                            items_str = ", ".join(items) if items else "-"
+                            html += f'<td class="metric-value">{items_str}</td>'
                         html += '</tr>'
 
                 html += '</tbody></table>'
@@ -1968,7 +1968,7 @@ def main():
         print("Fetching Hot Deals ranges (merged cell workaround)...")
         hot_deals_ranges = {
             "outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="J19:O55"),
-            "inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AA19:AI55"),
+            "inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AA19:AO55"),
             "intl_inbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="AU19:AZ55"),
             "intl_outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="BK19:BP55"),
         }
