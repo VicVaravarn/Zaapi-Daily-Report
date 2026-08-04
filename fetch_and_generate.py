@@ -403,9 +403,9 @@ class SalesHuddleParser:
         result = {
             "header_date": "",
             "won": {},
-            "due_to_renew": {"pleum": [], "loogpad": []},
-            "renewed": {"pleum": [], "loogpad": []},
-            "churned": {"pleum": [], "loogpad": []}
+            "due_to_renew": {"pleum": [], "loogpad": [], "pear": [], "james": [], "run": []},
+            "renewed": {"pleum": [], "loogpad": [], "pear": [], "james": [], "run": []},
+            "churned": {"pleum": [], "loogpad": [], "pear": [], "james": [], "run": []}
         }
 
         if green_cells is None:
@@ -444,7 +444,13 @@ class SalesHuddleParser:
                     "pleum_wtd": get_val(1, 9),
                     "pleum_daily": get_val(1, 10),
                     "loogpad_wtd": get_val(1, 12),
-                    "loogpad_daily": get_val(1, 13)
+                    "loogpad_daily": get_val(1, 13),
+                    "pear_wtd": get_val(1, 15),
+                    "pear_daily": get_val(1, 16),
+                    "james_wtd": get_val(1, 18),
+                    "james_daily": get_val(1, 19),
+                    "run_wtd": get_val(1, 21),
+                    "run_daily": get_val(1, 22)
                 }
 
             # Parse sections: due_to_renew, renewed, churned
@@ -489,22 +495,50 @@ class SalesHuddleParser:
                             "confirmed": confirmed
                         })
 
+                    # Pear: date in col15, name in col16
+                    pear_date = get_val(row_idx, 15)
+                    pear_name = get_val(row_idx, 16)
+                    if pear_name:
+                        confirmed = pear_name in green_cells
+                        result["due_to_renew"]["pear"].append({
+                            "name": pear_name,
+                            "date": pear_date,
+                            "confirmed": confirmed
+                        })
+
+                    # James: date in col18, name in col19
+                    james_date = get_val(row_idx, 18)
+                    james_name = get_val(row_idx, 19)
+                    if james_name:
+                        confirmed = james_name in green_cells
+                        result["due_to_renew"]["james"].append({
+                            "name": james_name,
+                            "date": james_date,
+                            "confirmed": confirmed
+                        })
+
+                    # Run: date in col21, name in col22
+                    run_date = get_val(row_idx, 21)
+                    run_name = get_val(row_idx, 22)
+                    if run_name:
+                        confirmed = run_name in green_cells
+                        result["due_to_renew"]["run"].append({
+                            "name": run_name,
+                            "date": run_date,
+                            "confirmed": confirmed
+                        })
+
                 elif current_section == "renewed":
-                    # Renewed: name in col9 (Pleum), col12 (Loogpad) - no dates
-                    pleum_name = get_val(row_idx, 9)
-                    loogpad_name = get_val(row_idx, 12)
-                    if pleum_name:
-                        result["renewed"]["pleum"].append(pleum_name)
-                    if loogpad_name:
-                        result["renewed"]["loogpad"].append(loogpad_name)
+                    for agent, col in [("pleum", 9), ("loogpad", 12), ("pear", 15), ("james", 18), ("run", 21)]:
+                        name = get_val(row_idx, col)
+                        if name:
+                            result["renewed"][agent].append(name)
 
                 elif current_section == "churned":
-                    pleum_name = get_val(row_idx, 9)
-                    loogpad_name = get_val(row_idx, 12)
-                    if pleum_name:
-                        result["churned"]["pleum"].append(pleum_name)
-                    if loogpad_name:
-                        result["churned"]["loogpad"].append(loogpad_name)
+                    for agent, col in [("pleum", 9), ("loogpad", 12), ("pear", 15), ("james", 18), ("run", 21)]:
+                        name = get_val(row_idx, col)
+                        if name:
+                            result["churned"][agent].append(name)
 
         except Exception as e:
             print(f"Error parsing renewal section: {e}", file=sys.stderr)
@@ -1475,10 +1509,12 @@ class HTMLDashboardGenerator:
         date_label = f" ({header_date})" if header_date else ""
         html += f'<div class="section-title">TH Account Management - Renewal{date_label}</div>'
 
-        if not renewal or (not renewal.get("due_to_renew", {}).get("pleum") and
-                          not renewal.get("due_to_renew", {}).get("loogpad") and
-                          not renewal.get("renewed", {}).get("pleum") and
-                          not renewal.get("renewed", {}).get("loogpad")):
+        if not renewal or (not renewal.get("due_to_renew", {}).get("loogpad") and
+                          not renewal.get("due_to_renew", {}).get("james") and
+                          not renewal.get("due_to_renew", {}).get("run") and
+                          not renewal.get("renewed", {}).get("loogpad") and
+                          not renewal.get("renewed", {}).get("james") and
+                          not renewal.get("renewed", {}).get("run")):
             html += '<div class="unavailable">Data unavailable</div>'
             html += '</div>'
             return html
@@ -1487,68 +1523,94 @@ class HTMLDashboardGenerator:
         won = renewal.get("won", {})
         won_total = self.safe_number(won.get("total_wtd", "0"))
         won_loogpad = self.safe_number(won.get("loogpad_wtd", "0"))
+        won_james = self.safe_number(won.get("james_wtd", "0"))
+        won_run = self.safe_number(won.get("run_wtd", "0"))
 
-        if won_total != "0" or won_loogpad != "0":
+        if won_total != "0" or won_loogpad != "0" or won_james != "0" or won_run != "0":
             html += f'<div style="margin-bottom: 15px; padding: 10px; background: rgba(34, 197, 94, 0.1); border-radius: 6px; border-left: 4px solid #22c55e;">'
             html += f'<span style="font-weight: 600; color: #22c55e;">Won Renewals WTD:</span> '
-            html += f'Total: <strong>{won_total}</strong> | Loogpad: <strong>{won_loogpad}</strong>'
+            html += f'Total: <strong>{won_total}</strong> | Loogpad: <strong>{won_loogpad}</strong> | James: <strong>{won_james}</strong> | Run: <strong>{won_run}</strong>'
             html += '</div>'
 
         # Due to Renew table
-        due_loogpad = renewal.get("due_to_renew", {}).get("loogpad", [])
+        renewal_agents = [("loogpad", "Loogpad"), ("james", "James"), ("run", "Run")]
+        due_data = {key: renewal.get("due_to_renew", {}).get(key, []) for key, _ in renewal_agents}
 
-        if due_loogpad:
+        if any(due_data.values()):
             html += '<h3 style="font-size: 1.1em; margin: 15px 0 10px; color: #94a3b8;">Due to Renew This Week</h3>'
+            html += '<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">'
 
-            # Loogpad column
-            html += '<div>'
-            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px; font-size: 1.05em;">Loogpad</div>'
-            html += '<table style="width: 100%;">'
-            html += '<thead><tr><th style="text-align: left; font-size: 0.8em;">Date</th>'
-            html += '<th style="text-align: left; font-size: 0.8em;">Account</th>'
-            html += '<th style="text-align: center; font-size: 0.8em;">Status</th></tr></thead><tbody>'
-            for item in due_loogpad:
-                name = item.get("name", "")
-                date = item.get("date", "")
-                confirmed = item.get("confirmed", False)
-                if confirmed:
-                    row_style = 'style="background: rgba(34, 197, 94, 0.15);"'
-                    status_badge = '<span style="background: #22c55e; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600;">Confirmed</span>'
+            for agent_key, agent_name in renewal_agents:
+                agent_due = due_data.get(agent_key, [])
+                html += '<div>'
+                html += f'<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px; font-size: 1.05em;">{agent_name}</div>'
+                if agent_due:
+                    html += '<table style="width: 100%;">'
+                    html += '<thead><tr><th style="text-align: left; font-size: 0.8em;">Date</th>'
+                    html += '<th style="text-align: left; font-size: 0.8em;">Account</th>'
+                    html += '<th style="text-align: center; font-size: 0.8em;">Status</th></tr></thead><tbody>'
+                    for item in agent_due:
+                        name = item.get("name", "")
+                        date = item.get("date", "")
+                        confirmed = item.get("confirmed", False)
+                        if confirmed:
+                            row_style = 'style="background: rgba(34, 197, 94, 0.15);"'
+                            status_badge = '<span style="background: #22c55e; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600;">Confirmed</span>'
+                        else:
+                            row_style = ''
+                            status_badge = '<span style="color: #94a3b8; font-size: 0.8em;">Pending</span>'
+                        html += f'<tr {row_style}><td style="font-size: 0.85em; color: #94a3b8; white-space: nowrap;">{date}</td>'
+                        html += f'<td style="font-weight: 500;">{name}</td>'
+                        html += f'<td style="text-align: center;">{status_badge}</td></tr>'
+                    html += '</tbody></table>'
                 else:
-                    row_style = ''
-                    status_badge = '<span style="color: #94a3b8; font-size: 0.8em;">Pending</span>'
-                html += f'<tr {row_style}><td style="font-size: 0.85em; color: #94a3b8; white-space: nowrap;">{date}</td>'
-                html += f'<td style="font-weight: 500;">{name}</td>'
-                html += f'<td style="text-align: center;">{status_badge}</td></tr>'
-            html += '</tbody></table>'
-            html += '</div>'
+                    html += '<div style="color: #64748b; font-style: italic; padding: 10px;">No accounts due</div>'
+                html += '</div>'
+
+            html += '</div>'  # Close grid
 
         # Renewed section
-        renewed_loogpad = renewal.get("renewed", {}).get("loogpad", [])
+        renewed_data = {key: renewal.get("renewed", {}).get(key, []) for key, _ in renewal_agents}
 
-        if renewed_loogpad:
+        if any(renewed_data.values()):
             html += '<h3 style="font-size: 1.1em; margin: 20px 0 10px; color: #22c55e;">&#10003; Renewed</h3>'
+            html += '<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">'
 
-            html += '<div>'
-            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Loogpad</div>'
-            html += '<div class="account-list">'
-            for name in renewed_loogpad:
-                html += f'<span class="account-tag" style="border-color: #22c55e; background: rgba(34, 197, 94, 0.15);">{name}</span>'
-            html += '</div>'
+            for agent_key, agent_name in renewal_agents:
+                html += '<div>'
+                html += f'<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">{agent_name}</div>'
+                agent_renewed = renewed_data.get(agent_key, [])
+                if agent_renewed:
+                    html += '<div class="account-list">'
+                    for name in agent_renewed:
+                        html += f'<span class="account-tag" style="border-color: #22c55e; background: rgba(34, 197, 94, 0.15);">{name}</span>'
+                    html += '</div>'
+                else:
+                    html += '<div style="color: #64748b; font-style: italic;">-</div>'
+                html += '</div>'
+
             html += '</div>'
 
         # Churned section
-        churned_loogpad = renewal.get("churned", {}).get("loogpad", [])
+        churned_data = {key: renewal.get("churned", {}).get(key, []) for key, _ in renewal_agents}
 
-        if churned_loogpad:
+        if any(churned_data.values()):
             html += '<h3 style="font-size: 1.1em; margin: 20px 0 10px; color: #ef4444;">Churned</h3>'
+            html += '<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">'
 
-            html += '<div>'
-            html += '<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">Loogpad</div>'
-            html += '<div class="account-list">'
-            for name in churned_loogpad:
-                html += f'<span class="account-tag" style="border-color: #ef4444; background: rgba(239, 68, 68, 0.15);">{name}</span>'
-            html += '</div>'
+            for agent_key, agent_name in renewal_agents:
+                html += '<div>'
+                html += f'<div style="font-weight: 700; color: #3b82f6; margin-bottom: 8px;">{agent_name}</div>'
+                agent_churned = churned_data.get(agent_key, [])
+                if agent_churned:
+                    html += '<div class="account-list">'
+                    for name in agent_churned:
+                        html += f'<span class="account-tag" style="border-color: #ef4444; background: rgba(239, 68, 68, 0.15);">{name}</span>'
+                    html += '</div>'
+                else:
+                    html += '<div style="color: #64748b; font-style: italic;">-</div>'
+                html += '</div>'
+
             html += '</div>'
 
         html += '</div>'  # Close section
@@ -1975,7 +2037,7 @@ def main():
 
         # Fetch renewal section data with range-specific query
         print("Fetching Renewal section data...")
-        renewal_range = fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="R58:AF100")
+        renewal_range = fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="R58:AO100")
 
         # Use already-fetched XLSX for green cell detection (confirmed renewals)
         print("Checking XLSX for renewal formatting...")
@@ -1983,10 +2045,11 @@ def main():
         try:
             if wb and week_name in wb.sheetnames:
                 ws = wb[week_name]
-                # Check account name columns (AB=28, AE=31) for green background
+                # Check account name columns for green background (confirmed renewals)
+                # AB=28 (Pleum), AE=31 (Loogpad), AH=34 (Pear), AK=37 (James), AN=40 (Run)
                 # Due to renew entries start at row 61 in the actual sheet
                 for row in range(61, 100):
-                    for col in [28, 31]:  # AB and AE columns
+                    for col in [28, 31, 34, 37, 40]:  # AB, AE, AH, AK, AN columns
                         cell = ws.cell(row=row, column=col)
                         name = str(cell.value).strip() if cell.value else ""
                         if name and cell.fill and cell.fill.fgColor:
