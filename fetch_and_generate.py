@@ -89,18 +89,6 @@ class GoogleSheetsFetcher:
         year = iso_calendar[0]
         return f"CW{week_number} {year}"
 
-    def resolve_sheet_name_from_wb(self, wb, expected_name: str) -> str:
-        """Find exact sheet name in XLSX workbook, handling whitespace mismatches."""
-        if not wb:
-            return expected_name
-        for name in wb.sheetnames:
-            if name.strip() == expected_name.strip():
-                if name != expected_name:
-                    print(f"  Resolved sheet name: '{expected_name}' -> '{name}' (whitespace adjusted)")
-                return name
-        print(f"  Warning: Sheet '{expected_name}' not found in workbook")
-        return expected_name
-
 
 class SalesHuddleParser:
     """Parses Sales Huddle sheet data."""
@@ -154,6 +142,7 @@ class SalesHuddleParser:
                 val = row[col].strip() if col < len(row) else ""
                 vals.append((val, val.lower() if val else "", name))
 
+            # Check if any agent column has a category keyword
             detected_cat = None
             for val, chk, name in vals:
                 if chk == "hot deal":
@@ -168,6 +157,7 @@ class SalesHuddleParser:
 
             if detected_cat:
                 current_category = detected_cat
+                # Pick up non-category values on the same row
                 for val, chk, name in vals:
                     if name and val and chk not in category_keywords:
                         hot_deals[current_category][name].append(val)
@@ -756,7 +746,7 @@ class RegistrationWeeklyParser:
       - GLOBAL (grand total)
       - TH, SEA, ROW (region rollups)
       - MY, SG, PH (SEA submarkets)
-      - ROW submarkets by country (BR, DE, CH, ‚Äö√Ñ¬∂)
+      - ROW submarkets by country (BR, DE, CH, ‚Ä¶)
 
     NOTE: We bucket by *market* (column E), not the region column, because the
     current-week feed sometimes tags rows as region=ROW with country names like
@@ -766,7 +756,7 @@ class RegistrationWeeklyParser:
     For each bucket we compute:
       - qualified           = sum(col J)
       - hqplus              = sum(col N)
-      - total               = qualified + hqplus   (per spec ‚Äö√Ñ√Æ not col O)
+      - total               = qualified + hqplus   (per spec ‚Äî not col O)
       - attributed          = total contribution from rows with ad_source set
       - unattributed        = total contribution from rows with blank/unknown
                               ad_source
@@ -791,7 +781,7 @@ class RegistrationWeeklyParser:
         "TL", "TP", "EAST TIMOR",
     }
 
-    # Country name ‚Äö√ú√≠ ISO alpha-2 code for ROW (and a few SEA aliases). Used to
+    # Country name ‚Üí ISO alpha-2 code for ROW (and a few SEA aliases). Used to
     # label ROW sub-rows. If a market value is already a 2-letter code we use
     # it directly.
     COUNTRY_NAME_TO_CODE = {
@@ -834,7 +824,7 @@ class RegistrationWeeklyParser:
         "UNKNOWN": "??",
     }
 
-    # Reverse map (code ‚Äö√ú√≠ friendly label) for display.
+    # Reverse map (code ‚Üí friendly label) for display.
     CODE_TO_LABEL = {
         "US": "United States", "UK": "United Kingdom",
         "DE": "Germany", "CH": "Switzerland",
@@ -886,9 +876,9 @@ class RegistrationWeeklyParser:
     def _classify_market(self, market: str):
         """Return (region, submarket, country_code).
 
-        region        ‚Äö√†√† {"TH", "SEA", "ROW"}
-        submarket     ‚Äö√†√† {"MY", "SG", "PH"} or None  (only set for SEA majors)
-        country_code  ISO alpha-2 (or fallback) ‚Äö√Ñ√Æ only meaningful for ROW;
+        region        ‚àà {"TH", "SEA", "ROW"}
+        submarket     ‚àà {"MY", "SG", "PH"} or None  (only set for SEA majors)
+        country_code  ISO alpha-2 (or fallback) ‚Äî only meaningful for ROW;
                       for SEA/TH this is left to the caller (we don't break
                       out non-major SEA countries).
         """
@@ -1403,7 +1393,7 @@ class HTMLDashboardGenerator:
             </div>
             <div class="card">
                 <div class="label">Dashboard Status</div>
-                <div class="value">‚Äö√∫√¨</div>
+                <div class="value">‚úì</div>
                 <div class="subtext">All systems operational</div>
             </div>
         </div>
@@ -1423,8 +1413,7 @@ class HTMLDashboardGenerator:
             html += self._generate_funnel_table(
                 outbound.get("funnel", []),
                 agents=["Yayee", "Toey"],
-                agent_keys=["yayee", "toey"],
-                show_targets=False
+                agent_keys=["yayee", "toey"]
             )
 
             # Hot Deals section
@@ -1708,22 +1697,19 @@ class HTMLDashboardGenerator:
         return html
 
     def _generate_funnel_table(self, funnel: List[Dict[str, str]],
-                               agents: List[str], agent_keys: List[str],
-                               show_targets: bool = True) -> str:
+                               agents: List[str], agent_keys: List[str]) -> str:
         """Generate a funnel metrics table."""
         html = '<table>'
         html += '<thead><tr>'
         html += '<th>Metric</th>'
         html += '<th style="text-align: right;">Total WTD</th>'
         html += '<th style="text-align: right;">Total Daily</th>'
-        if show_targets:
-            html += '<th style="text-align: right;">WTD vs Target</th>'
+        html += '<th style="text-align: right;">WTD vs Target</th>'
 
         for agent in agents:
             html += f'<th style="text-align: right;">{agent} WTD</th>'
             html += f'<th style="text-align: right;">{agent} Daily</th>'
-            if show_targets:
-                html += f'<th style="text-align: right;">{agent} vs Target</th>'
+            html += f'<th style="text-align: right;">{agent} vs Target</th>'
 
         html += '</tr></thead><tbody>'
 
@@ -1739,12 +1725,11 @@ class HTMLDashboardGenerator:
             html += f'<td class="metric-value">{total_wtd}</td>'
             html += f'<td class="metric-value">{total_daily}</td>'
 
-            if show_targets:
-                # Target color
-                color = self.get_target_color(total_vs_target, "100%")
-                target_class = "metric-target" if color == self.ZAAPI_COLORS["success"] else \
-                              "metric-warning" if color == self.ZAAPI_COLORS["warning"] else "metric-danger"
-                html += f'<td class="metric-value {target_class}">{total_vs_target}</td>'
+            # Target color
+            color = self.get_target_color(total_vs_target, "100%")
+            target_class = "metric-target" if color == self.ZAAPI_COLORS["success"] else \
+                          "metric-warning" if color == self.ZAAPI_COLORS["warning"] else "metric-danger"
+            html += f'<td class="metric-value {target_class}">{total_vs_target}</td>'
 
             # Agent columns
             for agent_key in agent_keys:
@@ -1755,11 +1740,10 @@ class HTMLDashboardGenerator:
                 html += f'<td class="metric-value">{wtd}</td>'
                 html += f'<td class="metric-value">{daily}</td>'
 
-                if show_targets:
-                    color = self.get_target_color(vs_target, "100%")
-                    target_class = "metric-target" if color == self.ZAAPI_COLORS["success"] else \
-                                  "metric-warning" if color == self.ZAAPI_COLORS["warning"] else "metric-danger"
-                    html += f'<td class="metric-value {target_class}">{vs_target}</td>'
+                color = self.get_target_color(vs_target, "100%")
+                target_class = "metric-target" if color == self.ZAAPI_COLORS["success"] else \
+                              "metric-warning" if color == self.ZAAPI_COLORS["warning"] else "metric-danger"
+                html += f'<td class="metric-value {target_class}">{vs_target}</td>'
 
             html += '</tr>'
 
@@ -1775,8 +1759,8 @@ class HTMLDashboardGenerator:
         Rows (in order):
           GLOBAL (grand total),
           TH,
-          SEA, ‚Äö√ú‚â• MY, ‚Äö√ú‚â• SG, ‚Äö√ú‚â• PH,
-          ROW, ‚Äö√ú‚â• <country code> for every ROW country with data this week.
+          SEA, ‚Ü≥ MY, ‚Ü≥ SG, ‚Ü≥ PH,
+          ROW, ‚Ü≥ <country code> for every ROW country with data this week.
         Source: registration_weekly tab, filtered to current ISO week (WTD).
         """
         html = '<div class="section">'
@@ -1816,7 +1800,7 @@ class HTMLDashboardGenerator:
             if emphasize:
                 # Bold the GLOBAL row so the grand total reads as the header line.
                 tr_style = ' style="font-weight: 700; border-top: 2px solid #334155; border-bottom: 2px solid #334155;"'
-            display = ("&nbsp;&nbsp;&nbsp;&nbsp;‚Äö√ú‚â• " + label) if indent else label
+            display = ("&nbsp;&nbsp;&nbsp;&nbsp;‚Ü≥ " + label) if indent else label
 
             row_html = f'<tr{tr_style}><td class="metric-name"{name_style}>{display}</td>'
             row_html += f'<td class="metric-value">{qualified}</td>'
@@ -1917,18 +1901,18 @@ class SlackNotifier:
             ])
 
             message = f"""
-:chart_with_upwards_trend: *Zaapi Daily Activity Report ‚Äö√Ñ√Æ {date_str}*
+:chart_with_upwards_trend: *Zaapi Daily Activity Report ‚Äî {date_str}*
 
-*Marketing ‚Äö√Ñ√Æ Lead Overview (WTD)*
+*Marketing ‚Äî Lead Overview (WTD)*
 *GLOBAL:* {total_leads_wtd} total  |  Qualified: {qualified_wtd}  |  HQ+: {hqplus_wtd}
 {marketing_table}
 
-*Sales ‚Äö√Ñ√Æ Won Deals WTD*
-‚Äö√Ñ¬¢ Outbound: *{outbound_won}*  |  Inbound: *{inbound_won}*
-‚Äö√Ñ¬¢ Intl Outbound: *{intl_out_won}*  |  Intl Inbound: *{intl_in_won}*
+*Sales ‚Äî Won Deals WTD*
+‚Ä¢ Outbound: *{outbound_won}*  |  Inbound: *{inbound_won}*
+‚Ä¢ Intl Outbound: *{intl_out_won}*  |  Intl Inbound: *{intl_in_won}*
 
-*Sales ‚Äö√Ñ√Æ Contacts WTD*
-‚Äö√Ñ¬¢ Outbound: *{outbound_contact}*  |  Inbound: *{inbound_contact}*
+*Sales ‚Äî Contacts WTD*
+‚Ä¢ Outbound: *{outbound_contact}*  |  Inbound: *{inbound_contact}*
 
 :link: <{dashboard_url}|View Full Dashboard>
             """.strip()
@@ -1987,20 +1971,14 @@ def main():
     week_name = fetcher.get_current_week_sheet_name()
     print(f"Current week: {week_name}")
 
-    # Fetch XLSX first for sheet name resolution and green cell detection
-    sales_sheet_id = "1A33NpnkZlgrwyDSOKn3nwB0u5mFtal2BlVC0nGZL7Xk"
-    print("Fetching XLSX for sheet name resolution and renewal formatting...")
-    wb = fetcher.fetch_sheet_xlsx(sales_sheet_id)
-    week_name = fetcher.resolve_sheet_name_from_wb(wb, week_name)
-
     sales_sheet = fetcher.fetch_sheet(
-        sales_sheet_id,
+        "1A33NpnkZlgrwyDSOKn3nwB0u5mFtal2BlVC0nGZL7Xk",
         week_name
     )
 
     # Marketing leads now sourced from the Zaapi-growth Ads Data sheet
     # (tab: registration_weekly). We aggregate the current ISO week's rows by
-    # market into TH / SEA / MY / SG / PH / ROW buckets ‚Äö√Ñ√Æ see
+    # market into TH / SEA / MY / SG / PH / ROW buckets ‚Äî see
     # RegistrationWeeklyParser.
     print("Fetching Marketing Lead Overview (registration_weekly)...")
     marketing_sheet = fetcher.fetch_sheet(
@@ -2027,6 +2005,7 @@ def main():
     if sales_sheet:
         # Fetch hot deals sections with range-specific queries to work around
         # Google Sheets merged cell CSV export issues that drop agent data
+        sales_sheet_id = "1A33NpnkZlgrwyDSOKn3nwB0u5mFtal2BlVC0nGZL7Xk"
         print("Fetching Hot Deals ranges (merged cell workaround)...")
         hot_deals_ranges = {
             "outbound": fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="J19:O55"),
@@ -2039,10 +2018,11 @@ def main():
         print("Fetching Renewal section data...")
         renewal_range = fetcher.fetch_sheet(sales_sheet_id, week_name, cell_range="R58:AO100")
 
-        # Use already-fetched XLSX for green cell detection (confirmed renewals)
-        print("Checking XLSX for renewal formatting...")
+        # Fetch XLSX for green cell detection (confirmed renewals)
+        print("Fetching XLSX for renewal formatting...")
         green_cells = set()
         try:
+            wb = fetcher.fetch_sheet_xlsx(sales_sheet_id)
             if wb and week_name in wb.sheetnames:
                 ws = wb[week_name]
                 # Check account name columns for green background (confirmed renewals)
