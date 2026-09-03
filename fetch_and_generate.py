@@ -7,7 +7,7 @@ Fetches sales & marketing data from Google Sheets and posts a summary to Slack.
 import csv
 import sys
 import io
-import argparse
+import argpars
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
@@ -73,7 +73,7 @@ class WeekViewParser:
         },
         "intl_inbound": {
             "header": "INTL-Inbound",
-            "agents": ["Thanom", "KoKo", "Patty"],
+            "agents": ["KoKo", "Thanom", "Patty"],
             "metrics": ["Won", "Renewal"],
         },
     }
