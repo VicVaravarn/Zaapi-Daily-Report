@@ -7,7 +7,7 @@ Fetches sales & marketing data from Google Sheets and posts a summary to Slack.
 import csv
 import sys
 import io
-import argpars
+import argparse
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
