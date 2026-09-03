@@ -1,4 +1,4 @@
-name: Daily Activity Report
+name: Daily Slack Report
 
 on:
   schedule:
@@ -6,12 +6,8 @@ on:
     - cron: '0 23 * * *'
   workflow_dispatch: # Allow manual trigger
 
-permissions:
-  contents: write
-  pages: write
-
 jobs:
-  generate-report:
+  report:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -23,19 +19,9 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests openpyxl
+        run: pip install requests
 
-      - name: Generate dashboard
+      - name: Run daily report
         run: |
           python fetch_and_generate.py \
-            --output index.html \
-            --slack-webhook-url "${{ secrets.SLACK_WEBHOOK_URL }}" \
-            --github-pages-url "https://vicvaravarn.github.io/Zaapi-Daily-Report/"
-
-      - name: Commit and push updated dashboard
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.html
-          git diff --staged --quiet || git commit -m "Update daily report - $(date +'%d/%m/%Y %H:%M UTC')"
-          git push
+            --slack-webhook-url "${{ secrets.SLACK_WEBHOOK_URL }}"
