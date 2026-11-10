@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
-"""
+#!/usr/bin/env python3"""
 Zaapi Daily Slack Report
 Fetches sales & marketing data from Google Sheets and posts a summary to Slack.
-"""
+""
 
 import csv
 import sys
@@ -10,6 +9,7 @@ import io
 import argparse
 import requests
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional, Any
 
 
@@ -410,7 +410,7 @@ def main():
         gid="859536577"
     )
 
-    _today = datetime.now().date()
+    _today = datetime.now(tz=ZoneInfo("Asia/Bangkok")).date()
     current_week_start_mon = (_today - timedelta(days=_today.weekday())).isoformat()
     print(f"  Current week_start_mon: {current_week_start_mon}")
 
