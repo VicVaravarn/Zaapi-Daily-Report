@@ -2,7 +2,7 @@
 """
 Zaapi Daily Slack Report
 Fetches sales & marketing data from Google Sheets and posts a summary to Slack.
-""""
+"""
 
 import csv
 import sys
